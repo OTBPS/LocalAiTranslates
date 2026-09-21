@@ -45,7 +45,10 @@ def permutation(task_id: str, count: int) -> list[int]:
     return order
 
 
-def build(dataset: list[dict], systems: dict[str, dict[str, str]], prefix: str):
+def build(dataset: list[dict], systems: dict[str, dict[str, str]], prefix: str, per_task: int | None = None):
+    """Build blind tasks. `per_task` keeps only the first N shuffled candidates,
+    which is enough to validate a judge that itself scores one translation at a
+    time, and cuts annotation effort proportionally."""
     tasks, keys = [], []
     missing: Counter[str] = Counter()
     for record in dataset:
@@ -58,6 +61,8 @@ def build(dataset: list[dict], systems: dict[str, dict[str, str]], prefix: str):
             continue
         order = permutation(f"{prefix}:{record_id}", len(available))
         shuffled = [available[index] for index in order]
+        if per_task:
+            shuffled = shuffled[:per_task]
         tasks.append(
             {
                 "task_id": f"{prefix}-{record_id}",
@@ -86,6 +91,25 @@ def build(dataset: list[dict], systems: dict[str, dict[str, str]], prefix: str):
     return tasks, keys, missing
 
 
+def judge_inputs(dataset: list[dict], tasks: list[dict]) -> list[dict]:
+    """Rows the model judge must score, identical to what the humans will see."""
+    by_id = {record["id"]: record for record in dataset}
+    rows = []
+    for task in tasks:
+        record = by_id[task["record_id"]]
+        for candidate in task["candidates"]:
+            rows.append(
+                {
+                    **record,
+                    "id": f"{task['task_id']}#{candidate['label']}",
+                    "task_id": task["task_id"],
+                    "label": candidate["label"],
+                    "translation": candidate["text"],
+                }
+            )
+    return rows
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dataset", type=Path, required=True)
@@ -99,6 +123,11 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--prefix", default="gold")
     parser.add_argument("--limit", type=int)
+    parser.add_argument(
+        "--candidates-per-task",
+        type=int,
+        help="Keep only N candidates per record (1 is enough to validate the judge).",
+    )
     args = parser.parse_args()
 
     systems: dict[str, dict[str, str]] = {}
@@ -116,7 +145,7 @@ def main() -> int:
     dataset = read_jsonl(args.dataset)
     if args.limit:
         dataset = dataset[: args.limit]
-    tasks, keys, missing = build(dataset, systems, args.prefix)
+    tasks, keys, missing = build(dataset, systems, args.prefix, args.candidates_per_task)
     if not tasks:
         parser.error("no tasks built: the predictions do not cover any dataset record")
 
@@ -127,6 +156,12 @@ def main() -> int:
     )
     (args.output_dir / "assignment_key.jsonl").write_text(
         "".join(json.dumps(key, ensure_ascii=False) + "\n" for key in keys), encoding="utf-8"
+    )
+    # The judge must score exactly what the humans score, or the comparison is meaningless.
+    judge_path = args.output_dir / "judge_input.jsonl"
+    judge_path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in judge_inputs(dataset, tasks)),
+        encoding="utf-8",
     )
     manifest = {
         "schema_version": 1,
@@ -140,7 +175,9 @@ def main() -> int:
         "missing_predictions": dict(missing),
         "domains": dict(sorted(Counter(task["domain"] for task in tasks).items())),
         "directions": dict(sorted(Counter(task["direction"] for task in tasks).items())),
+        "candidates_per_task_limit": args.candidates_per_task,
         "tasks_sha256": file_sha256(tasks_path),
+        "judge_input_sha256": file_sha256(judge_path),
         "blinding": "per-task sha256 permutation; assignment_key.jsonl is not loaded by the UI",
         "usage_restriction": (
             "gold annotation only; must not inform training, prompts, hyperparameters, "

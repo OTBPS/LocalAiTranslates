@@ -139,6 +139,43 @@ def test_disputed_items_block_clearing_and_are_listed(tmp_path):
     assert any("arbitration" in b for b in report["blockers"])
 
 
+def test_a_degenerate_gold_set_cannot_validate_the_judge(tmp_path):
+    """全部判可用的 gold 集没有区分度，必须明确拒绝而不是报告完美一致。"""
+    alice, bob, out = tmp_path / "a.jsonl", tmp_path / "b.jsonl", tmp_path / "r.json"
+    rows = [annotation(f"t{i}", "A", True) for i in range(40)]
+    write(alice, rows)
+    write(bob, rows)
+
+    code = agreement_main(["--annotations", f"alice={alice}", "--annotations", f"bob={bob}",
+                           "--output", str(out)])
+
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["verdict_variance"]["degenerate"] is True
+    assert report["human_pairwise"]["alice vs bob"]["agreement"] == 1.0
+    assert report["human_pairwise"]["alice vs bob"]["cohens_kappa"] is None
+    assert report["may_clear_judge_is_provisional"] is False
+    assert any("discriminative power" in b for b in report["blockers"])
+    assert code == 1
+
+
+def test_graded_scores_give_a_weighted_kappa_when_usable_is_constant(tmp_path):
+    alice, bob, out = tmp_path / "a.jsonl", tmp_path / "b.jsonl", tmp_path / "r.json"
+    rows_a, rows_b = [], []
+    for index in range(20):
+        score = 3 if index % 2 else 4
+        rows_a.append({**annotation(f"t{index}", "A", True), "accuracy": score})
+        rows_b.append({**annotation(f"t{index}", "A", True), "accuracy": score})
+    write(alice, rows_a)
+    write(bob, rows_b)
+
+    agreement_main(["--annotations", f"alice={alice}", "--annotations", f"bob={bob}",
+                    "--output", str(out)])
+
+    entry = json.loads(out.read_text(encoding="utf-8"))["human_pairwise"]["alice vs bob"]
+    assert entry["accuracy_items"] == 20
+    assert entry["accuracy_quadratic_kappa"] == 1.0
+
+
 def test_clearing_requires_the_model_judge_to_agree_too(tmp_path):
     alice, bob, out = tmp_path / "a.jsonl", tmp_path / "b.jsonl", tmp_path / "r.json"
     # Perfectly agreeing humans with a real split of usable/unusable.

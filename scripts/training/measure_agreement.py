@@ -51,6 +51,35 @@ def cohens_kappa(pairs: list[tuple[bool, bool]]) -> float | None:
     return (observed - expected) / (1 - expected)
 
 
+def quadratic_weighted_kappa(pairs: list[tuple[int, int]], categories: int = 5) -> float | None:
+    """Weighted kappa over ordinal 0-4 scores.
+
+    The binary `usable` verdict collapses to a constant on easy sets, which
+    leaves plain Cohen's kappa undefined. Graded scores usually retain enough
+    variance to still measure agreement.
+    """
+    total = len(pairs)
+    if not total:
+        return None
+    observed = [[0] * categories for _ in range(categories)]
+    left_counts = [0] * categories
+    right_counts = [0] * categories
+    for left, right in pairs:
+        observed[left][right] += 1
+        left_counts[left] += 1
+        right_counts[right] += 1
+    denominator = (categories - 1) ** 2
+    numerator_o = numerator_e = 0.0
+    for i in range(categories):
+        for j in range(categories):
+            weight = ((i - j) ** 2) / denominator
+            numerator_o += weight * observed[i][j]
+            numerator_e += weight * left_counts[i] * right_counts[j] / total
+    if numerator_e == 0:
+        return None
+    return 1 - (numerator_o / numerator_e)
+
+
 def band(kappa: float | None) -> str:
     if kappa is None:
         return "undefined"
@@ -67,6 +96,24 @@ def verdicts(rows: list[dict]) -> dict[tuple[str, str], bool]:
         if row.get("skipped"):
             continue
         out[(row["task_id"], row["label"])] = bool(row["usable"])
+    return out
+
+
+def accuracy_scores(rows: list[dict]) -> dict[tuple[str, str], int]:
+    """Map (task_id, label) -> accuracy 0-4, for the weighted-kappa fallback."""
+    out = {}
+    for row in rows:
+        if row.get("skipped"):
+            continue
+        value = row.get("accuracy")
+        if value is None or value == "":
+            continue
+        try:
+            score = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= score <= 4:
+            out[(row["task_id"], row["label"])] = score
     return out
 
 
@@ -110,19 +157,37 @@ def main(argv=None) -> int:
     if not shared:
         parser.error("the annotators have no overlapping items to compare")
 
+    scores = {name: accuracy_scores(rows) for name, rows in annotators.items()}
     pairwise = {}
     for index, left in enumerate(names):
         for right in names[index + 1 :]:
             pairs = [(tables[left][key], tables[right][key]) for key in sorted(shared)]
             agreement = sum(a == b for a, b in pairs) / len(pairs)
             kappa = cohens_kappa(pairs)
-            pairwise[f"{left} vs {right}"] = {
+            entry = {
                 "items": len(pairs),
                 "agreement": round(agreement, 4),
                 "cohens_kappa": None if kappa is None else round(kappa, 4),
                 "kappa_band": band(kappa),
             }
+            graded = sorted(set(scores[left]) & set(scores[right]))
+            if graded:
+                score_pairs = [(scores[left][key], scores[right][key]) for key in graded]
+                weighted = quadratic_weighted_kappa(score_pairs)
+                entry["accuracy_items"] = len(score_pairs)
+                entry["accuracy_quadratic_kappa"] = None if weighted is None else round(weighted, 4)
+                entry["accuracy_agreement"] = round(
+                    sum(a == b for a, b in score_pairs) / len(score_pairs), 4
+                )
+            pairwise[f"{left} vs {right}"] = entry
     report["human_pairwise"] = pairwise
+
+    # A gold set on which every verdict is identical cannot validate anything.
+    verdict_values = {value for table in tables.values() for value in table.values()}
+    report["verdict_variance"] = {
+        "distinct_human_verdicts": sorted(verdict_values),
+        "degenerate": len(verdict_values) < 2,
+    }
 
     disputed = sorted(key for key in shared if len({table[key] for table in tables.values()}) > 1)
     report["disputed_items"] = [{"task_id": t, "label": ll} for t, ll in disputed]
@@ -180,6 +245,11 @@ def main(argv=None) -> int:
         blockers.append("model judge agreement with adjudicated humans below threshold")
     if disputed:
         blockers.append(f"{len(disputed)} disputed items await arbitration")
+    if report["verdict_variance"]["degenerate"]:
+        blockers.append(
+            "every human verdict is identical: this gold set has no discriminative power "
+            "and cannot validate the judge; add harder layers"
+        )
     report["may_clear_judge_is_provisional"] = not blockers
     report["blockers"] = blockers
 
