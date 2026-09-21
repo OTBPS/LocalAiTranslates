@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "project_id": "screen-translator",
+  "model_root_env": "AI_MODEL_ROOT",
+  "training_root_env": "AI_TRAINING_ROOT",
+  "required_models": [
+    {
+      "model_id": "qwen3-8b-q5-k-m",
+      "role": "translation",
+      "status": ["production"]
+    },
+    {
+      "model_id": "paddleocr-pp-ocrv5-mobile-det",
+      "role": "ocr-detection",
+      "status": ["production"]
+    },
+    {
+      "model_id": "paddleocr-pp-ocrv5-mobile-rec",
+      "role": "ocr-recognition",
+      "status": ["production"]
+    },
+    {
+      "model_id": "paddleocr-korean-pp-ocrv5-mobile-rec",
+      "role": "ocr-recognition-ko",
+      "status": ["production"]
+    }
+  ],
+  "optional_models": [
+    {
+      "model_id": "qwen3-14b-q5-k-m",
+      "role": "translation",
+      "purpose": "high-quality mode and language fallback"
+    },
+    {
+      "model_id": "qwen3-4b-instruct-2507-q8-0",
+      "role": "translation",
+      "purpose": "fast English-oriented mode"
+    }
+  ],
+  "training_models": [
+    {
+      "model_id": "qwen3-4b-hf-1cfa9a7",
+      "role": "training"
+    },
+    {
+      "model_id": "qwen3-8b-hf-b968826",
+      "role": "training"
+    }
+  ],
+  "release_gate": {
+    "block_alignment_min": 0.895,
+    "usable_translation_min": 0.94,
+    "duplicate_or_hallucinated_blocks_max": 0
+  }
+}

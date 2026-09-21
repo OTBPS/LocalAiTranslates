@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "screen-translator"
+dynamic = ["version"]
+description = "Offline Windows screenshot translator"
+requires-python = ">=3.11,<3.13"
+dependencies = ["PySide6>=6.8,<7", "numpy>=1.26,<3", "opencv-contrib-python==4.10.0.84", "requests>=2.32,<3", "paddleocr==3.7.0", "paddlepaddle-gpu==3.3.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov>=6", "ruff>=0.11", "pyinstaller>=6"]
+
+[project.scripts]
+screen-translator = "screen_translator.app:main"
+
+[tool.setuptools.packages.find]
+include = ["screen_translator*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "screen_translator.version.__version__"}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]

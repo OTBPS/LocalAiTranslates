@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <rect x="48" y="48" width="928" height="928" fill="#C51D23" stroke="#151515" stroke-width="40"/>
+  <path d="M540 68H956V956H272Z" fill="#151515"/>
+  <circle cx="770" cy="232" r="132" fill="#E8BC35" stroke="#151515" stroke-width="28"/>
+  <path d="M174 350V198H326M698 198H850V350M174 674V826H326M698 826H850V674"
+        fill="none" stroke="#F8F1E2" stroke-width="48" stroke-linecap="square" stroke-linejoin="miter"/>
+  <text x="512" y="676" text-anchor="middle"
+        font-family="Microsoft YaHei UI, Microsoft YaHei, sans-serif" font-size="476" font-weight="900"
+        fill="#F8F1E2" stroke="#151515" stroke-width="18" paint-order="stroke">译</text>
+</svg>
