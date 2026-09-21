@@ -9,10 +9,20 @@
 - 新增 `scripts/training/check_release_gate.py` 对真实评测报告判定门槛，结果与人工结论一致：
   - `runs\full-eval-v1\qwen3-4b-teacher-v2`（300 条不可变集）：block_alignment 1.0000 PASS、duplicate 0 PASS、**usable 0.8367 FAIL**，退出码 1。
   - `runs\final-eval-v1 + final-judge-v1\qwen3-8b-teacher-v1`（300 条）：block_alignment 1.0000 PASS、duplicate 0 PASS、**usable 0.9000 FAIL**，退出码 1。全部适配器中最高为 dev 集 0.9111，仍低于 0.94。
+
+  > **口径提示（2026-09-21 补记）**：以上 usable 数字来自旧判官协议（`--batch-size 10`、不打乱）。
+  > 后续实测发现该协议受批内上下文污染，同一批数据仅改变批次组成，usable 可在 ±2 个百分点内摆动，
+  > 并**系统性低估约 3 个点**；改用单条判分（`--batch-size 1`）后结果完全确定。
+  > 这些数字因此**不可与 2026-09-21 之后的任何分数直接比较**，也不应被引用为适配器的真实水平。
+  > 结论本身不变：即使按低估幅度上修，0.8367 / 0.9000 仍远低于 0.94 门槛。
+  > 修正后的协议、指标定义与全部重测基线见 `D:\AI\Training\screen-translator\runs\REPORT-enzh-v1.md`。
 - `D:\AI\Models\registry.json` 共 9 条记录，kind 只有 `base-inference` / `base-training` / `auxiliary`，**零条 adapter/derived**；`D:\AI\Models\adapters` 与 `derived` 不存在。
 - 因此本版本不接入任何适配器：`models.SUPPORTED_ADAPTERS` 与 `model-requirements.json` 的 `adapters` 均为空，应用只加载 `production` 基础模型。适配器加载通路已实现并测试（registry 解析 → kind/status/format/依赖/尺寸五道校验 → `--lora-scaled`），任一条不满足都会报错而非静默回退。
 - 转换缺口：适配器为 HF PEFT safetensors，工作区内无任何 GGUF 转换产物或脚本，`.train-venv` 未安装 `gguf` 包，机器上无 `convert_lora_to_gguf.py`。`llama-server` b10964 已确认支持 `--lora` / `--lora-scaled` / `POST /lora-adapters`。`use_rslora=true` 时 PEFT 有效缩放为 `alpha/sqrt(r)=8.0` 而 llama.cpp 默认 `alpha/r=2.0`，转换后必须用实测验证缩放等价性。
 - 所有语义指标均由 `qwen3-14b-q5-k-m` 自评并标记 `judge_is_provisional: true`，发布前仍需人工 gold 集。
+- 同理，本节的 `protected token` 相关判断使用的是旧指标定义，它会把 `3-1`→"3比1"、`FBI`→"联邦调查局"、
+  `10:15`→"上午10点15分" 这类**正确的本地化**误判为丢失 token。指标已于 2026-09-21 收紧，
+  重测后 8B 与 4B 均为 1.0000、14B 为 0.9900。
 
 ### 功能与质量
 
