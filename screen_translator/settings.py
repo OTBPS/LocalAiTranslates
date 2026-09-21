@@ -1,4 +1,4 @@
-"""Settings window for language, runtime, and model preferences."""
+"""Main application window: capture, text translation, and system settings."""
 
 from dataclasses import replace
 from pathlib import Path
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -39,8 +40,9 @@ from .models import (
     models_ready,
 )
 from .native import set_startup
+from .text_translation_page import TextTranslationPage
 from .theme import UI_COLORS, asset_path
-from .ui_components import ConstructivistHero, ToggleRow
+from .ui_components import ConstructivistHero, ToggleRow, make_card
 
 
 class Settings(QWidget):
@@ -51,7 +53,7 @@ class Settings(QWidget):
         self.c = controller
         self.setWindowTitle("屏译")
         self.setMinimumSize(680, 600)
-        self.resize(760, 720)
+        self.resize(820, 840)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
@@ -82,6 +84,17 @@ class Settings(QWidget):
         hero_layout.addWidget(title)
         hero_layout.addStretch()
         layout.addWidget(hero)
+
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.setAccessibleName("工作区")
+        capture_page, capture_layout = self.make_page()
+        text_host, text_layout = self.make_page()
+        system_page, system_layout = self.make_page()
+        self.tabs.addTab(capture_page, "截图翻译")
+        self.tabs.addTab(text_host, "文本翻译")
+        self.tabs.addTab(system_page, "系统设置")
+        layout.addWidget(self.tabs, 1)
 
         language_card, language_layout = self.make_card("语言")
         self.language_card = language_card
@@ -119,7 +132,23 @@ class Settings(QWidget):
         language_grid.setColumnStretch(0, 1)
         language_grid.setColumnStretch(2, 1)
         language_layout.addLayout(language_grid)
-        layout.addWidget(language_card)
+        capture_layout.addWidget(language_card)
+
+        status_card, status_card_layout = self.make_card("状态")
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+        self.model_status = QLabel()
+        self.ocr_status = QLabel()
+        self.qwen_status = QLabel()
+        for chip in (self.model_status, self.ocr_status, self.qwen_status):
+            chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            status_row.addWidget(chip, 1)
+        status_card_layout.addLayout(status_row)
+        capture_layout.addWidget(status_card)
+        capture_layout.addStretch()
+
+        self.text_page = TextTranslationPage(controller)
+        text_layout.addWidget(self.text_page, 1)
 
         preferences_card, preferences_layout = self.make_card("偏好")
         shortcut_label = QLabel("全局截图快捷键")
@@ -147,7 +176,7 @@ class Settings(QWidget):
         self.cpu.setToolTip("CUDA 不可用时使用，速度较慢")
         self.cpu.setChecked(controller.config.allow_cpu)
         preferences_layout.addWidget(cpu_row)
-        layout.addWidget(preferences_card)
+        system_layout.addWidget(preferences_card)
 
         model_card, model_layout = self.make_card("模型")
         model_label = QLabel("翻译模型")
@@ -174,15 +203,6 @@ class Settings(QWidget):
         directory_row.addWidget(browse)
         model_layout.addLayout(directory_row)
 
-        status_row = QHBoxLayout()
-        status_row.setSpacing(8)
-        self.model_status = QLabel()
-        self.ocr_status = QLabel()
-        self.qwen_status = QLabel()
-        for chip in (self.model_status, self.ocr_status, self.qwen_status):
-            chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            status_row.addWidget(chip, 1)
-        model_layout.addLayout(status_row)
         self.status = QLabel()
         self.status.setObjectName("helperText")
         self.status.setWordWrap(True)
@@ -213,7 +233,8 @@ class Settings(QWidget):
         self.cleanup_button.clicked.connect(self.reset_models)
         actions.addWidget(self.cleanup_button)
         model_layout.addLayout(actions)
-        layout.addWidget(model_card)
+        system_layout.addWidget(model_card)
+        system_layout.addStretch()
 
         footer_bar = QFrame()
         footer_bar.setObjectName("footerBar")
@@ -240,8 +261,16 @@ class Settings(QWidget):
         self.refresh()
 
     def focus_language_controls(self):
+        self.tabs.setCurrentIndex(0)
         self.scroll.ensureWidgetVisible(self.language_card, 0, 16)
         self.source_language.setFocus(Qt.FocusReason.ShortcutFocusReason)
+
+    def make_page(self):
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 16, 0, 0)
+        page_layout.setSpacing(14)
+        return page, page_layout
 
     def confirm_exit(self):
         if (
@@ -255,20 +284,7 @@ class Settings(QWidget):
             self.exit_requested.emit()
 
     def make_card(self, title, subtitle=None):
-        card = QFrame()
-        card.setObjectName("card")
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(20, 18, 20, 18)
-        card_layout.setSpacing(12)
-        heading = QLabel(title)
-        heading.setObjectName("sectionTitle")
-        card_layout.addWidget(heading)
-        if subtitle:
-            hint = QLabel(subtitle)
-            hint.setObjectName("helperText")
-            hint.setWordWrap(True)
-            card_layout.addWidget(hint)
-        return card, card_layout
+        return make_card(title, subtitle)
 
     def make_divider(self):
         divider = QFrame()
@@ -310,6 +326,8 @@ class Settings(QWidget):
             self.source_language.blockSignals(False)
             self.target_language.blockSignals(False)
             self.translation_model.blockSignals(False)
+        if hasattr(self, "text_page"):
+            self.text_page.load_config()
 
     def model_selection_changed(self):
         model = get_translation_model(self.translation_model.currentData())
@@ -392,6 +410,8 @@ class Settings(QWidget):
         self.cleanup_button.setEnabled(editable and ready)
         self.capture_button.setEnabled(editable and ready)
         self.capture_button.setText("开始截图" if ready else "模型未就绪")
+        if hasattr(self, "text_page"):
+            self.text_page.refresh()
 
     def set_status(self, text):
         self.status.setText(text)

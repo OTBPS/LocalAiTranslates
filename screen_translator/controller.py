@@ -22,7 +22,9 @@ from .core import (
     swap_language_pair,
 )
 from .graphics import OverlayRenderer, ScreenShot, capture_region, to_array
+from .inference import CAPTURE, InferenceCoordinator
 from .logging_setup import configure_logging
+from .manual_translation import ManualTranslationController
 from .models import models_ready
 from .native import Hotkey
 from .ocr_engine import OcrEngine
@@ -71,6 +73,9 @@ class Controller(QObject):
         self.translator = self._translator_factory(
             self.config.model_dir, self.config.allow_cpu, self.config.translation_model
         )
+        # One shared inference slot; the provider indirection keeps engine swaps visible.
+        self.inference = InferenceCoordinator(lambda: self.translator)
+        self.manual = ManualTranslationController(self.inference, self.tasks, self)
         self.download_token = None
         self.ocr_warmup_token = None
         self.overlays: list[Overlay] = []
@@ -134,6 +139,7 @@ class Controller(QObject):
         if self.ocr_warmup_token:
             self.ocr_warmup_token.cancel()
             self.ocr_warmup_token = None
+        self.manual.cancel()
         self.translator.stop()
         self.ocr = self._ocr_factory(self.config.model_dir, self.config.allow_cpu)
         self.translator = self._translator_factory(
@@ -280,12 +286,14 @@ class Controller(QObject):
         if not models_ready(self.config.model_dir, self.config.translation_model):
             self.show_settings()
             return
+        self.inference.cancel_manual()
         self.settings.hide()
         QTimer.singleShot(120, self.begin)
 
     def begin(self) -> None:
         if self.overlays or self.busy:
             return
+        self.inference.begin_capture()
         generation = self.session.begin()
         self.screens = []
         for screen in self.app.screens():
@@ -308,6 +316,10 @@ class Controller(QObject):
             token = self.token
 
             def warm_translation():
+                # Loading weights can outlast any reasonable slot wait, so warm-up
+                # never holds the slot; it only runs while nothing else owns it.
+                if self.inference.owner is not None:
+                    return
                 try:
                     self.translator.start(token, lambda _: None)
                 except Cancelled:
@@ -357,14 +369,15 @@ class Controller(QObject):
                 if not blocks:
                     raise RuntimeError("没有识别到清晰的横排文字")
                 translation_started = time.monotonic()
-                translated = self.translator.translate(
-                    blocks,
-                    token,
-                    progress,
-                    source_language,
-                    target_language,
-                    ocr_result.detected_language,
-                )
+                with self.inference.reserve(CAPTURE) as engine:
+                    translated = engine.translate(
+                        blocks,
+                        token,
+                        progress,
+                        source_language,
+                        target_language,
+                        ocr_result.detected_language,
+                    )
                 translation_ms = (time.monotonic() - translation_started) * 1000
                 render_started = time.monotonic()
                 result = self._renderer_factory().render(
@@ -415,6 +428,7 @@ class Controller(QObject):
         if not self.session.is_current(generation):
             self._finish_stale_cancel(generation)
             return
+        self.inference.end_capture()
         if not self.overlays or result is None:
             return
         self.result = result
@@ -438,6 +452,7 @@ class Controller(QObject):
 
     def cancel(self) -> None:
         previous_state = self.session.state
+        self.inference.end_capture()
         self.session.invalidate()
         for overlay in self.overlays:
             overlay.close()
@@ -464,6 +479,7 @@ class Controller(QObject):
 
     def quit(self) -> None:
         self.cancel()
+        self.manual.cancel()
         if self.ocr_warmup_token:
             self.ocr_warmup_token.cancel()
         if self.download_token:

@@ -41,6 +41,32 @@ GGUF variants are declared in the translation-model catalog. Configuration store
 
 The canonical local repository is `D:\AI\Models`, while mutable Screen Translator datasets, caches, runs, checkpoints, and unqualified adapters live in `D:\AI\Training\screen-translator`. Downloads publish into a model-specific directory and atomically replace the registry. Redownload quarantines only the selected translation artifact. Application upgrades and uninstall never mutate either shared root.
 
+## Inference arbitration
+
+One llama.cpp server serves both workspaces. `InferenceCoordinator` owns a single slot and is the
+only sanctioned way to reach `TranslationPort.translate`. Capture preempts: `Controller.begin`
+cancels the registered manual token and marks the capture active, so a manual request made during
+a capture is refused rather than queued. A manual translation holds the slot for its whole run,
+which also protects the fallback path in `TranslationEngine` — it stops the server mid-flight and
+must never do so while another caller is streaming.
+
+Model warm-up is the one exception: loading weights can outlast any reasonable slot wait, so
+warm-up skips itself when the slot is owned instead of blocking the capture pipeline behind it.
+
+Manual translation never uses `CaptureSession`. It has its own monotonic request ID, its own
+cancellation token, and its own signals; results from a superseded request are dropped by both the
+use-case controller and the view.
+
+## Released adapters
+
+`models.SUPPORTED_ADAPTERS` maps a base model ID to the adapter released for it and is empty until
+an adapter passes the gate in `model-requirements.json`. Resolution goes through the registry and
+requires `kind == "adapter"`, `status == "production"`, `format == "gguf"`, the
+`translation-adapter` role, a `dependencies` entry naming the active base model, and a size match.
+A listed adapter that fails any of these raises; the application never silently falls back to base
+weights while claiming a fine-tuned model. Unqualified training output stays in
+`D:\AI\Training\screen-translator`.
+
 ## Threading
 
 `TaskRunner` owns background workers. Workers communicate with the UI only through Qt signals. Cancellation remains cooperative because native Paddle and llama.cpp calls cannot always be interrupted immediately. Application shutdown cancels tokens, stops llama.cpp, then briefly joins managed workers.

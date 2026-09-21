@@ -4,7 +4,21 @@ All notable user-visible changes are recorded here. Versions follow semantic ver
 
 ## Unreleased
 
-## 0.5.3
+## 0.6.0
+
+- Add a text translation workspace: type or paste text, translate it locally, cancel a running
+  translation, copy the result, and clear the fields.
+- Reorganize the main window into 截图翻译 / 文本翻译 / 系统设置 workspaces while keeping the
+  tray menu, single-instance activation, close-to-tray, and exit behaviour unchanged.
+- Preserve paragraphs, indentation, list markers, and numbering deterministically by segmenting
+  the input outside the model request and restoring the framing verbatim.
+- Serialize screenshot and text translation through one inference slot; starting a capture cancels
+  an in-flight text translation and text requests are refused while a capture runs.
+- Resolve released LoRA adapters through the shared registry and load them with llama.cpp
+  `--lora-scaled`, rejecting adapters that are experimental, mismatched, corrupted, or not GGUF.
+  No adapter ships yet: none has passed the project release gate.
+- Add `scripts/training/check_release_gate.py` so the declared release gate is machine-checked
+  against evaluation reports instead of read by hand.
 
 - Add a bottom-positioned Exit action to the tray menu.
 - Reuse the settings exit confirmation and centralized resource cleanup path.

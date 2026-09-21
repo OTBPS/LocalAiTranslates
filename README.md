@@ -6,6 +6,10 @@ Windows 11 本地截屏翻译，支持 Qwen3-4B-Instruct-2507 Q8_0、Qwen3-8B / 
 
 运行安装器或 `dist/ScreenTranslator/ScreenTranslator.exe`。首次在设置中选择模型目录和 4B、8B 或 14B，点击“下载 / 校验模型”（4B Q8 约 4.3 GB、8B 约 5.8 GB、14B 约 10.5 GB，另有 OCR 权重）。三个翻译模型可以并存和随时切换。4B 是英文优化的极速模式：日文和韩文在已安装 14B 时自动使用 14B；8B 的韩文同样自动使用 14B。所选小模型处理失败时也会回退 14B，未安装 14B 时仍继续使用所选模型。模型下载完成后使用 `Ctrl+Alt+T` 框选文字，单击任意位置切换原图与译文，Esc 或同一快捷键退出。设置页可选择自动识别、中文、英语、日语或韩语作为输入，输出支持中英日韩；托盘菜单显示当前语言对并可一键对调。自动识别需成功识别一次后才能对调。
 
+v0.6 的主窗口分为“截图翻译 / 文本翻译 / 系统设置”三个工作区。文本翻译可直接输入或粘贴文字，`Ctrl+Enter` 或“翻译”按钮开始，支持取消、复制译文和清空，与截图翻译共用同一份语言配置、对调规则和本地模型；段落、缩进、列表符号和编号由分段器原样保留，不依赖模型还原。截图与文本翻译共用同一个 llama.cpp 会话：按下截图快捷键会取消正在进行的文本翻译，截图期间发起的文本翻译会被拒绝并提示，不会出现两个推理任务争抢显存。单次输入上限 2 万字符；输入为空、只有符号数字或输入输出语言相同时直接返回原文并说明原因。译文不写入磁盘，也不保存历史。
+
+本项目训练出的 LoRA 适配器目前**没有一个通过发布门槛**（`model-requirements.json` 要求 usable ≥ 94%，最好的 4B 适配器为 83.67%、8B 为 90.00%），因此应用只加载已注册为 `production` 的基础模型。适配器加载通路已经实现并有测试：通过 `registry.json` 的稳定 model_id 解析，校验类型、状态、GGUF 格式、基础模型依赖和文件大小后用 llama.cpp `--lora-scaled` 加载，任一条不满足都会明确报错而不是静默回退。`scripts/training/check_release_gate.py` 可对任意评测运行判定门槛。
+
 语言下拉框和“⇄”按钮会即时保存，无需再点击“保存设置”；翻译结果层可右键打开语言菜单并对调下一次截图的翻译方向。v0.5 使用 `D:\AI\Models\registry.json` 的稳定模型 ID 解析共享模型，训练资产位于 `D:\AI\Training\screen-translator`；应用更新和卸载不会修改这两个共享目录。旧版平面 `manifest.json` 仍可只读使用。默认不保存截图、原文、译文，无历史记录或遥测。只有用户主动下载时访问 Hugging Face；翻译 HTTP 端点只在本机回环地址监听，并要求随机密钥。
 
 v0.3 使用面向 Windows 桌面工具重新设计的设置界面：语言方向作为首要操作，模型/OCR/Qwen 状态分开展示，下载进度与错误反馈保持在模型区域，保存与截图入口固定在窗口底部；界面支持键盘焦点、150% DPI 和垂直滚动。截图覆盖层使用更清晰的状态胶囊、选区尺寸标签及高对比边角标记。
@@ -43,7 +47,7 @@ python -m venv .venv
 
 ## 架构与边界
 
-`app.py` 只负责应用启动与依赖组装；`controller.py` 编排截图、OCR、翻译和结果层；`session.py` 以显式状态机管理一次截图会话；`tasks.py` 统一管理后台任务；`settings.py`、`overlay.py` 和 `theme.py` 负责界面。`ocr_engine.py` 与 `translation_engine.py` 分别实现 OCR 和本地翻译，均通过 `contracts.py` 中的接口注入；`layout.py` 负责阅读顺序和语义分块，`translation_quality.py` 负责无内容日志的结果校验；`engines.py` 仅保留旧导入路径兼容。`core.py` 定义稳定数据结构、取消令牌和配置迁移；`model_registry.py` 解析和校验共享模型；`models.py` 管理显式下载；`graphics.py` 做跨 DPI 拼接、背景修复和文字排版；`native.py` 注册 Win32 全局快捷键并通过 Job Object 回收子进程。
+`app.py` 只负责应用启动与依赖组装；`controller.py` 编排截图、OCR、翻译和结果层；`session.py` 以显式状态机管理一次截图会话；`tasks.py` 统一管理后台任务；`settings.py`、`overlay.py` 和 `theme.py` 负责界面。文本翻译拆为四个独立模块：`text_segmenter.py` 只做分段与重组，`inference.py` 的 `InferenceCoordinator` 仲裁唯一的推理槽，`manual_translation.py` 管理任务 ID、取消令牌、过期结果和无内容日志，`text_translation_page.py` 只负责视图；它们复用 `contracts.py` 的 `TranslationPort`，没有扩展接口。`ocr_engine.py` 与 `translation_engine.py` 分别实现 OCR 和本地翻译，均通过 `contracts.py` 中的接口注入；`layout.py` 负责阅读顺序和语义分块，`translation_quality.py` 负责无内容日志的结果校验；`engines.py` 仅保留旧导入路径兼容。`core.py` 定义稳定数据结构、取消令牌和配置迁移；`model_registry.py` 解析和校验共享模型；`models.py` 管理显式下载；`graphics.py` 做跨 DPI 拼接、背景修复和文字排版；`native.py` 注册 Win32 全局快捷键并通过 Job Object 回收子进程。
 
 完整的依赖方向、会话生命周期和扩展约束见 [`docs/architecture.md`](docs/architecture.md)。版本只在 `screen_translator/version.py` 中定义；完整构建和补丁构建都会先执行 Ruff 与带覆盖率门槛的测试。
 

@@ -44,17 +44,20 @@ def test_cancel_closes_all_overlays_and_invalidates_generation():
     overlays = [Mock(), Mock()]
     session = CaptureSession(generation=1, state=SessionState.SELECTING)
     session.token = Mock()
+    inference = Mock()
     state = SimpleNamespace(
         session=session,
         overlays=overlays,
         capture=object(),
         result=object(),
         screens=[1],
+        inference=inference,
         refresh_language_actions=Mock(),
     )
     Controller.cancel(state)
     assert session.token is None and session.generation == 2 and state.overlays == []
     assert session.state == SessionState.IDLE
+    inference.end_capture.assert_called_once()
     for overlay in overlays:
         overlay.close.assert_called_once()
 

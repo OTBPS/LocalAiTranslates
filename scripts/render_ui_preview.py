@@ -16,7 +16,10 @@ from PySide6.QtGui import QFont, QFontDatabase  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from screen_translator.core import LANGUAGE_NAMES, Config  # noqa: E402
+from screen_translator.inference import InferenceCoordinator  # noqa: E402
+from screen_translator.manual_translation import ManualTranslationController  # noqa: E402
 from screen_translator.settings import Settings  # noqa: E402
+from screen_translator.tasks import TaskRunner  # noqa: E402
 from screen_translator.theme import application_stylesheet  # noqa: E402
 
 
@@ -36,6 +39,8 @@ class PreviewController:
         self.detected_source_language = None
         self.ocr = SimpleNamespace(mode="CUDA")
         self.translator = SimpleNamespace(mode="CUDA")
+        self.inference = InferenceCoordinator(lambda: self.translator)
+        self.manual = ManualTranslationController(self.inference, TaskRunner())
 
     def language_pair_text(self):
         return (
@@ -74,6 +79,8 @@ def main() -> int:
     window = Settings(PreviewController(root / "models"))
     if len(sys.argv) >= 4:
         window.resize(int(sys.argv[2]), int(sys.argv[3]))
+    if len(sys.argv) >= 5:
+        window.tabs.setCurrentIndex(int(sys.argv[4]))
     window.show()
     app.processEvents()
     if not window.grab().save(str(output)):

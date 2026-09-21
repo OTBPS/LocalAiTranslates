@@ -99,6 +99,33 @@ def application_stylesheet() -> str:
             border: 3px solid {c["focus"]};
             padding: 0 11px;
         }}
+        QPlainTextEdit {{
+            padding: 10px 12px;
+            background: {c["surface_muted"]};
+            border: 2px solid {c["border"]};
+            border-radius: 0;
+            selection-background-color: {c["primary"]};
+            selection-color: white;
+        }}
+        QPlainTextEdit:hover {{ background: #FFFFFF; border-color: {c["primary"]}; }}
+        QPlainTextEdit:focus {{ background: #FFFFFF; border: 3px solid {c["focus"]}; padding: 9px 11px; }}
+        QPlainTextEdit[readOnly="true"] {{ background: {c["surface"]}; }}
+        QTabWidget::pane {{ background: {c["background"]}; border: none; top: -2px; }}
+        QTabBar {{ background: transparent; qproperty-drawBase: 0; }}
+        QTabBar::tab {{
+            min-height: 40px;
+            min-width: 108px;
+            padding: 0 18px;
+            margin-right: 6px;
+            background: {c["surface"]};
+            color: {c["text_muted"]};
+            border: 2px solid {c["border"]};
+            border-radius: 0;
+            font-weight: 700;
+        }}
+        QTabBar::tab:hover {{ background: #E8BC35; color: {c["text"]}; }}
+        QTabBar::tab:selected {{ background: {c["primary"]}; color: white; }}
+        QTabBar::tab:focus {{ border: 3px solid {c["focus"]}; }}
         QComboBox::drop-down {{ border: none; width: 34px; }}
         QComboBox QAbstractItemView {{
             background: {c["surface"]};

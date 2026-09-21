@@ -195,6 +195,66 @@ def resolve_model_path(root, model_id, role=None):
     return ModelRegistry.open(root).resolve(model_id, role)
 
 
+ADAPTER_ROLE = "translation-adapter"
+# Fine-tuned adapters that passed the project release gate, keyed by base model ID.
+# Empty on purpose: no trained adapter has reached the gate in
+# `model-requirements.json` yet, so the application ships base weights only.
+# See D:\AI\Training\screen-translator\runs\benchmark-v1\REPORT.md.
+SUPPORTED_ADAPTERS: dict[str, str] = {}
+
+
+class AdapterError(RuntimeError):
+    """An allow-listed adapter exists but cannot be used safely."""
+
+
+@dataclass(frozen=True)
+class AdapterBinding:
+    model_id: str
+    path: Path
+    scale: float
+
+    def argument(self) -> str:
+        return f"{self.path}:{self.scale:g}"
+
+
+def resolve_translation_adapter(root, base_model_id, adapters=None):
+    """Resolve the released adapter for ``base_model_id`` through the registry.
+
+    Returns ``None`` when the base model has no allow-listed adapter.  When one
+    is listed but fails any release requirement this raises instead of silently
+    falling back, so a run can never claim to use a trained adapter it did not
+    load.
+    """
+    catalog = SUPPORTED_ADAPTERS if adapters is None else adapters
+    adapter_id = catalog.get(base_model_id)
+    if not adapter_id:
+        return None
+    try:
+        registry = ModelRegistry.open(root)
+        record = registry.record(adapter_id)
+    except RegistryError as error:
+        raise AdapterError(f"适配器 {adapter_id} 未注册：{error}") from error
+    if record.get("kind") != "adapter":
+        raise AdapterError(f"适配器 {adapter_id} 的类型无效：{record.get('kind')}")
+    if record.get("status") != "production":
+        raise AdapterError(f"适配器 {adapter_id} 未通过发布门槛：{record.get('status')}")
+    if record.get("format") != "gguf":
+        raise AdapterError(f"适配器 {adapter_id} 的格式无法由 llama.cpp 加载：{record.get('format')}")
+    if base_model_id not in record.get("dependencies", []):
+        raise AdapterError(f"适配器 {adapter_id} 不依赖基础模型 {base_model_id}")
+    try:
+        path = registry.resolve(adapter_id, ADAPTER_ROLE)
+    except RegistryError as error:
+        raise AdapterError(f"适配器 {adapter_id} 无法解析：{error}") from error
+    result = registry.validate(adapter_id)
+    if not result.valid:
+        raise AdapterError(f"适配器 {adapter_id} 校验失败：{result.reason}")
+    scale = record.get("runtime", {}).get("lora_scale", 1.0)
+    if not isinstance(scale, (int, float)) or isinstance(scale, bool) or scale <= 0:
+        raise AdapterError(f"适配器 {adapter_id} 的缩放系数无效：{scale}")
+    return AdapterBinding(adapter_id, path, float(scale))
+
+
 def _registry_record(
     root: Path,
     model_id: str,

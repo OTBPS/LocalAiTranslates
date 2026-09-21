@@ -37,6 +37,7 @@
       "purpose": "fast English-oriented mode"
     }
   ],
+  "adapters": [],
   "training_models": [
     {
       "model_id": "qwen3-4b-hf-1cfa9a7",

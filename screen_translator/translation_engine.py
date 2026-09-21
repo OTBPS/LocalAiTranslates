@@ -1,6 +1,7 @@
 """Local llama.cpp translation backend."""
 
 import json
+import logging
 import secrets
 import socket
 import subprocess
@@ -14,8 +15,17 @@ from pathlib import Path
 import requests
 
 from .core import TARGET_LANGUAGES, Cancelled, TranslatedBlock, parse_translation
-from .models import DEFAULT_MODEL_ID, get_translation_model, resolve_model_path
+from .models import (
+    DEFAULT_MODEL_ID,
+    TRANSLATION_MODELS,
+    TranslationModel,
+    get_translation_model,
+    resolve_model_path,
+    resolve_translation_adapter,
+)
 from .translation_quality import find_translation_issues, repair_list_number
+
+LOGGER = logging.getLogger(__name__)
 
 LANGUAGE_NAMES = {
     "auto": "automatically detected language",
@@ -78,6 +88,8 @@ class TranslationEngine:
         model_id=DEFAULT_MODEL_ID,
         parallel_slots=None,
         fallback_factory=None,
+        *,
+        model_path_override=None,
     ):
         if parallel_slots is None:
             parallel_slots = 1 if model_id == DEFAULT_MODEL_ID else 2
@@ -85,8 +97,16 @@ class TranslationEngine:
             raise ValueError("parallel_slots must be between 1 and 4")
         self.root = Path(root).resolve()
         self.allow_cpu = allow_cpu
-        self.model = get_translation_model(model_id)
+        # `model_path_override` is an evaluation-only injection point: it lets the
+        # benchmark harness point at an unregistered GGUF without polluting the
+        # product model catalog. Production callers never pass it.
+        self.model_path_override = Path(model_path_override) if model_path_override else None
+        if self.model_path_override is not None and model_id not in TRANSLATION_MODELS:
+            self.model = TranslationModel(model_id, model_id, "", self.model_path_override.name, 0.0)
+        else:
+            self.model = get_translation_model(model_id)
         self.model_path = None
+        self.adapter_id = None
         self.parallel_slots = parallel_slots
         self.fallback_factory = fallback_factory or type(self)
         self.process = None
@@ -125,7 +145,15 @@ class TranslationEngine:
     def _start_locked(self, token, progress):
         if self.process and self.process.poll() is None:
             return
-        self.model_path = resolve_model_path(self.root, self.model.model_id, "translation")
+        if self.model_path_override is not None:
+            self.model_path = self.model_path_override
+            if not self.model_path.is_file():
+                raise RuntimeError(f"指定的模型文件不存在：{self.model_path}")
+            adapter = None
+        else:
+            self.model_path = resolve_model_path(self.root, self.model.model_id, "translation")
+            adapter = resolve_translation_adapter(self.root, self.model.model_id)
+        self.adapter_id = adapter.model_id if adapter else None
         base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
         exe = base / "runtime" / "llama" / "llama-server.exe"
         if not exe.exists():
@@ -159,6 +187,15 @@ class TranslationEngine:
                 '{"enable_thinking":false}',
                 "--no-webui",
             ]
+            if adapter:
+                args += ["--lora-scaled", adapter.argument()]
+            LOGGER.info(
+                "Starting llama.cpp model=%s adapter=%s slots=%d gpu=%s",
+                self.model.model_id,
+                self.adapter_id,
+                self.parallel_slots,
+                gpu,
+            )
             self.job = Job()
             self.process = subprocess.Popen(
                 args,

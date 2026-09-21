@@ -1,5 +1,41 @@
 # v0.2 验证记录
 
+## v0.6.0 文本输入翻译工作区（2026-09-20）
+
+### 训练适配器门槛结论
+
+- 训练工作区 `D:\AI\Training\screen-translator` 共 16.25 GB / 873 文件，含 17 个已训练 LoRA 适配器与 36 个 checkpoint（13.78 GB）。全部为 `r=16 / alpha=32 / dropout=0.05 / use_rslora=true / peft 0.21.0`，7 个 target modules。
+- 13 个 4B 适配器的基础模型是 `qwen3-4b-hf-1cfa9a7`（`Qwen/Qwen3-4B` rev `1cfa9a7208…`，权重 132,187,888 B）；2 个 8B 适配器是 `qwen3-8b-hf-b968826`（`Qwen/Qwen3-8B` rev `b968826d9c…`，权重 174,655,536 B）。`qwen3-4b-instruct-2507-teacher-v1` 只有 manifest，无权重也无基础模型，不可复现。
+- 新增 `scripts/training/check_release_gate.py` 对真实评测报告判定门槛，结果与人工结论一致：
+  - `runs\full-eval-v1\qwen3-4b-teacher-v2`（300 条不可变集）：block_alignment 1.0000 PASS、duplicate 0 PASS、**usable 0.8367 FAIL**，退出码 1。
+  - `runs\final-eval-v1 + final-judge-v1\qwen3-8b-teacher-v1`（300 条）：block_alignment 1.0000 PASS、duplicate 0 PASS、**usable 0.9000 FAIL**，退出码 1。全部适配器中最高为 dev 集 0.9111，仍低于 0.94。
+- `D:\AI\Models\registry.json` 共 9 条记录，kind 只有 `base-inference` / `base-training` / `auxiliary`，**零条 adapter/derived**；`D:\AI\Models\adapters` 与 `derived` 不存在。
+- 因此本版本不接入任何适配器：`models.SUPPORTED_ADAPTERS` 与 `model-requirements.json` 的 `adapters` 均为空，应用只加载 `production` 基础模型。适配器加载通路已实现并测试（registry 解析 → kind/status/format/依赖/尺寸五道校验 → `--lora-scaled`），任一条不满足都会报错而非静默回退。
+- 转换缺口：适配器为 HF PEFT safetensors，工作区内无任何 GGUF 转换产物或脚本，`.train-venv` 未安装 `gguf` 包，机器上无 `convert_lora_to_gguf.py`。`llama-server` b10964 已确认支持 `--lora` / `--lora-scaled` / `POST /lora-adapters`。`use_rslora=true` 时 PEFT 有效缩放为 `alpha/sqrt(r)=8.0` 而 llama.cpp 默认 `alpha/r=2.0`，转换后必须用实测验证缩放等价性。
+- 所有语义指标均由 `qwen3-14b-q5-k-m` 自评并标记 `judge_is_provisional: true`，发布前仍需人工 gold 集。
+
+### 功能与质量
+
+- Ruff 通过；完整测试 **290 passed / 4 skipped**，覆盖率 **73.85%**（v0.5.3 为 141 passed、64.03%）。跳过项仍为可选训练环境。
+- 新增测试：分段与重组 29 项、推理仲裁 9 项、文本翻译用例控制器 27 项、文本翻译页 22 项、适配器解析 18 项、llama.cpp 进程生命周期 9 项、发布门槛 17 项、日志隐私 4 项、离线 2 项、安装边界 8 项、截图抢占 4 项。
+- 源码版真机检查 `scripts/manual_translation_check.py`（阻断全部非回环 socket，CUDA，`qwen3-8b-q5-k-m`，报告 `build/manual-translation-check.json`）：en→zh 2.953 s / ja→zh 0.266 s / ko→zh 7.984 s（8B 的韩文按既有规则路由到 14B）/ zh→en 2.875 s，四项 `structure_preserved` 均为 true；`capture_exclusion=enforced`、`cancel_returns_to_idle=true`、`device=CUDA`、`adapter_id=null`。
+- 结构保真实测：229 字符、5 段、含三条编号项的英文清单译为中文后，编号、空行与换行逐字节保持（`1. / 2. / 3.` 与段间空行未变）。
+
+### 打包与安装
+
+- 增量包 `dist/updates/ScreenTranslator-0.6.0-Update.exe`，大小 **43,187,224 字节**，SHA-256 `519AA176457FE022445CCDE0AF5733A119A43E1AACFB7EAEE4B4C45DA9040BEE`，`-MinimumBaseVersion 0.5.0`，未签名。
+- **首次安装被自身基线门槛拒绝**：`Install test\ScreenTranslator` 的卸载项记录 `DisplayVersion=0.2.0`，日志为 `Base version rejected: installed=0.2.0, minimum=0.5.0`。经核实该记录是陈旧的——已安装 exe 含 `model_registry` / `translation_quality`，运行中的 `llama-server` 使用 registry 解析出的 `D:\AI\Models\base\qwen\...` 路径，即实际代码为 0.5.x；0.4.7/0.4.8 补丁曾正确写入版本，此后 exe 于 21:54 被直接复制替换（无 setup 日志）。经用户确认，先用 `reg export` 备份到 `build/uninstall-entry-backup-before-0.6.0.reg`，再把 DisplayVersion 修正为 0.5.3，随后补丁正常安装（退出码 0），记录更新为 0.6.0。
+- 原位升级，未创建平行安装目录。安装前后 `D:\AI\Models` 均为 83 文件 / 45,148,701,927 字节且 `registry.json` SHA-256 保持 `4DC2113948FED7A95C316783D4CDF61A55A308343F7E938A9FF575876D146564`；`D:\AI\Training` 均为 873 文件 / 17,445,459,266 字节。未复制或重新下载任何模型。
+- 用户配置未丢失：仍为 version 3、`Ctrl+Alt+Q`、`D:\AI\Models`、`qwen3-8b-q5-k-m`、en → zh-Hans。本版本未新增配置字段，`CURRENT_CONFIG_VERSION` 保持 3。
+- 安装后启动正常，主窗口标题为“屏译”，三个工作区构建成功；再次启动只唤醒既有窗口，进程数保持 1。
+- 打包版自检（`--self-test`，14B Q5_K_M）：冷流程 12.70 s、热流程 1.08 s，OCR 与 Qwen 均为 CUDA。自检结束后无残留 `llama-server` 进程；安装器通过 Restart Manager 关闭应用时，子进程也随 Job Object 一并回收。
+- 新增磁盘占用：新增源码约 55 KB，打包 EXE 由 41,533,812 增至 41,559,033 字节（+25 KB），无新依赖、无新模型字节。
+
+### 未覆盖
+
+- 打包版的鼠标点击交互（在真实窗口中点击“翻译 / 取消 / 复制译文 / 清空”）未做程序化验证，需人工点击确认；源码版的等价路径已由 `manual_translation_check.py` 与 Qt 离屏测试覆盖。
+- `runs\final-routed-v1` 只有 `predictions.jsonl`，没有 `summary.json`，因此发布中的路由配置无法由门槛脚本给出机械指标，只有 judge 侧数据。
+
 ## v0.5.3 托盘退出入口（2026-09-20）
 
 - 托盘右键菜单现在按“设置 → 当前语言对 → 退出”排列，退出固定为第三个可见选项和菜单最底部。

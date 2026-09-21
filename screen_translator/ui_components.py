@@ -23,6 +23,62 @@ def asset_path(name: str) -> str:
     return str(Path(__file__).with_name("assets") / name)
 
 
+def make_card(title: str, subtitle: str | None = None) -> tuple[QFrame, QVBoxLayout]:
+    """Build the standard bordered section used by every page."""
+    card = QFrame()
+    card.setObjectName("card")
+    card_layout = QVBoxLayout(card)
+    card_layout.setContentsMargins(20, 18, 20, 18)
+    card_layout.setSpacing(12)
+    heading = QLabel(title)
+    heading.setObjectName("sectionTitle")
+    card_layout.addWidget(heading)
+    if subtitle:
+        hint = QLabel(subtitle)
+        hint.setObjectName("helperText")
+        hint.setWordWrap(True)
+        card_layout.addWidget(hint)
+    return card, card_layout
+
+
+def make_language_row(source_languages, target_languages, names, swap_icon_path):
+    """Build the shared 输入语言 / ⇄ / 输出语言 row used by both workspaces."""
+    from PySide6.QtCore import QSize
+    from PySide6.QtGui import QIcon
+    from PySide6.QtWidgets import QComboBox, QGridLayout, QPushButton
+
+    grid = QGridLayout()
+    grid.setHorizontalSpacing(12)
+    grid.setVerticalSpacing(7)
+    source_label = QLabel("输入语言")
+    source_label.setObjectName("fieldLabel")
+    target_label = QLabel("输出语言")
+    target_label.setObjectName("fieldLabel")
+    grid.addWidget(source_label, 0, 0)
+    grid.addWidget(target_label, 0, 2)
+    source = QComboBox()
+    source.setAccessibleName("输入语言")
+    for code in source_languages:
+        source.addItem(names[code], code)
+    target = QComboBox()
+    target.setAccessibleName("输出语言")
+    for code in target_languages:
+        target.addItem(names[code], code)
+    swap = QPushButton()
+    swap.setObjectName("iconButton")
+    swap.setIcon(QIcon(swap_icon_path))
+    swap.setIconSize(QSize(22, 22))
+    swap.setAccessibleName("对调输入和输出语言")
+    swap.setToolTip("对调输入和输出语言")
+    swap.setFixedSize(44, 44)
+    grid.addWidget(source, 1, 0)
+    grid.addWidget(swap, 1, 1)
+    grid.addWidget(target, 1, 2)
+    grid.setColumnStretch(0, 1)
+    grid.setColumnStretch(2, 1)
+    return grid, source, swap, target
+
+
 class ConstructivistHero(QFrame):
     """A flat geometric banner inspired by Soviet constructivist composition."""
 
