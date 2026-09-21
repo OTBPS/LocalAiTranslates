@@ -128,7 +128,15 @@ def request_scores(engine: TranslationEngine, rows: list[dict]) -> dict[str, dic
     return values
 
 
-def summarize(rows: list[dict], seconds: float, left_name: str, right_name: str) -> dict:
+def summarize(
+    rows: list[dict],
+    seconds: float,
+    left_name: str,
+    right_name: str,
+    *,
+    judge_model: str = DEFAULT_MODEL_ID,
+    provisional: bool = True,
+) -> dict:
     by_language: dict[str, list[dict]] = defaultdict(list)
     by_domain: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
@@ -157,8 +165,9 @@ def summarize(rows: list[dict], seconds: float, left_name: str, right_name: str)
             "seconds": round(seconds, 3),
             "by_language": {key: aggregate(value) for key, value in sorted(by_language.items())},
             "by_domain": {key: aggregate(value) for key, value in sorted(by_domain.items())},
-            "judge_model": DEFAULT_MODEL_ID,
-            "judge_is_provisional": True,
+            # Report the judge that actually ran, not the module default.
+            "judge_model": judge_model,
+            "judge_is_provisional": provisional,
         }
     )
     return report
@@ -222,7 +231,9 @@ def main() -> int:
     (args.output / "comparisons.jsonl").write_text(
         "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in results), encoding="utf-8"
     )
-    report = summarize(results, elapsed, args.left_name, args.right_name)
+    report = summarize(
+        results, elapsed, args.left_name, args.right_name, judge_model=args.judge_model
+    )
     (args.output / "summary.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )

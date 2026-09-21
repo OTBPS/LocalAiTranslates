@@ -47,6 +47,10 @@ def main() -> int:
                     "dataset",
                     "records",
                     "peak_vram_gib",
+                    "gguf_path",
+                    "target_language",
+                    "parallel_slots",
+                    "generation",
                 }
             }
         )

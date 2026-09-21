@@ -14,15 +14,26 @@ from scripts.training.training_paths import MODEL_ROOT, workspace_path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from screen_translator.core import CancellationToken, OcrLine, TextBlock
+from screen_translator.core import TARGET_LANGUAGES, CancellationToken, OcrLine, TextBlock
 from screen_translator.models import TRANSLATION_MODELS
 from screen_translator.translation_engine import TranslationEngine
 
+# Tokens that must survive translation byte for byte: URLs, e-mail addresses,
+# Windows paths, and identifiers carrying a digit or an underscore (v1.2.3,
+# API_KEY_2, Qwen3-8B, E-104). Bare all-caps words are deliberately NOT here —
+# FBI/ATM/BST have correct Chinese renderings and requiring them verbatim
+# penalises good translation.
 TOKEN_PATTERN = re.compile(
-    r"https?://[^\s\]\[(){}<>\"'，。；！？]+|"
-    r"(?<![A-Za-z0-9_])(?:[A-Za-z_][A-Za-z0-9_.-]*\d[A-Za-z0-9_.-]*|"
-    r"[A-Z][A-Z0-9_]{1,}|\d[\d,.:/%-]*)(?![A-Za-z0-9_])"
+    r"https?://[^\s\]\[(){}<>\"'，。；！？]+"
+    r"|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+    r"|(?:[A-Za-z]:\\|\\\\)[^\s\"'，。；！？]+"
+    r"|(?<![A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_.-]*(?:_|\d)[A-Za-z0-9_.-]*(?![A-Za-z0-9_])"
 )
+# Clock times localise too freely to compare literally (10:15 -> 上午10点15分).
+TIME_PATTERN = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?")
+# Numbers are compared as a normalised multiset, so 3-1 -> 3比1 and 26,750 ->
+# 26750 both count as preserved.
+NUMBER_PATTERN = re.compile(r"\d+(?:[.,]\d+)*")
 SENTENCE_PATTERN = re.compile(r"[^\n。！？!?;；]+[。！？!?;；]?")
 
 
@@ -48,19 +59,39 @@ def chrf_score(candidate: str, reference: str, max_order: int = 6, beta: float =
 
 
 def protected_tokens(text: str) -> Counter[str]:
+    """Literal tokens that must appear verbatim in the translation."""
     return Counter(token.rstrip(".") for token in TOKEN_PATTERN.findall(text))
 
 
+def numeric_tokens(text: str) -> Counter[str]:
+    """Normalised numbers outside literal tokens and clock times."""
+    remainder = TIME_PATTERN.sub(" ", TOKEN_PATTERN.sub(" ", text))
+    counts: Counter[str] = Counter()
+    for raw in NUMBER_PATTERN.findall(remainder):
+        value = raw.replace(",", "").rstrip(".")
+        if value:
+            counts[value.lstrip("0") or "0"] += 1
+    return counts
+
+
 def token_preservation(source: str, candidate: str, reference: str | None = None) -> float:
-    expected = protected_tokens(source)
+    literals = protected_tokens(source)
+    numbers = numeric_tokens(source)
     if reference is not None:
-        # Only require source tokens that the human reference also keeps verbatim.
-        # Names that are legitimately transliterated must not look like corruption.
-        expected &= protected_tokens(reference)
-    if not expected:
+        # Only require what the human reference also kept, so a legitimate
+        # transliteration or localisation never looks like corruption.
+        literals &= protected_tokens(reference)
+        numbers &= numeric_tokens(reference)
+    # Numbers are compared as a set, not a multiset: localised scores legitimately
+    # collapse repeats (5-0-0 -> "5胜0负"), and demanding the same arity would
+    # penalise a correct rendering.
+    required_numbers = set(numbers)
+    total = sum(literals.values()) + len(required_numbers)
+    if not total:
         return 1.0
-    actual = protected_tokens(candidate)
-    return sum((expected & actual).values()) / sum(expected.values())
+    kept = sum((literals & protected_tokens(candidate)).values())
+    kept += len(required_numbers & set(numeric_tokens(candidate)))
+    return kept / total
 
 
 def unexpected_repetitions(candidate: str, reference: str) -> int:
@@ -95,23 +126,23 @@ def batches(records: list[dict], max_blocks: int = 10, max_chars: int = 2200):
         yield batch
 
 
-def translate_batch(engine, records, token):
+def translate_batch(engine, records, token, target_language="zh-Hans"):
     blocks = [make_block(record) for record in records]
     language = records[0]["source_language"]
     attempts = 1
     first_pass = True
     try:
-        values = engine.request(blocks, token, language, "zh-Hans")
+        values = engine.request(blocks, token, language, target_language)
     except ValueError:
         first_pass = False
         attempts += 1
         try:
-            values = engine.request(blocks, token, language, "zh-Hans", True)
+            values = engine.request(blocks, token, language, target_language, True)
         except ValueError:
             values = {}
             for block in blocks:
                 attempts += 1
-                values.update(engine.request([block], token, language, "zh-Hans", True))
+                values.update(engine.request([block], token, language, target_language, True))
     return values, first_pass, attempts
 
 
@@ -188,30 +219,53 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=Path, default=workspace_path("data/eval/v1/eval.jsonl"))
     parser.add_argument("--models-dir", type=Path, default=MODEL_ROOT)
-    parser.add_argument("--model", choices=tuple(TRANSLATION_MODELS), required=True)
+    parser.add_argument(
+        "--model",
+        required=True,
+        help="Registered translation model ID, or any label when --gguf-path is given.",
+    )
+    parser.add_argument(
+        "--gguf-path",
+        type=Path,
+        help="Evaluate an unregistered GGUF file directly (does not touch the product catalog).",
+    )
+    parser.add_argument("--target-language", choices=TARGET_LANGUAGES, default="zh-Hans")
+    parser.add_argument("--parallel-slots", type=int, choices=(1, 2, 3, 4))
+    parser.add_argument("--label", help="Output subdirectory name; defaults to --model.")
     parser.add_argument("--output-dir", type=Path, default=workspace_path("runs/baseline"))
-    parser.add_argument("--language", choices=("en", "ja", "ko"))
+    parser.add_argument("--language", choices=("en", "ja", "ko", "zh-Hans"))
     parser.add_argument("--limit", type=int)
     args = parser.parse_args()
+    if args.gguf_path is None and args.model not in TRANSLATION_MODELS:
+        parser.error(f"unknown model {args.model!r}; pass --gguf-path to evaluate an unregistered GGUF")
+    if args.gguf_path is not None and not args.gguf_path.is_file():
+        parser.error(f"--gguf-path does not exist: {args.gguf_path}")
 
     records = [json.loads(line) for line in args.dataset.read_text(encoding="utf-8").splitlines()]
     if args.language:
         records = [record for record in records if record["source_language"] == args.language]
     if args.limit:
         records = records[: args.limit]
-    grouped = []
-    for language in ("en", "ja", "ko"):
-        grouped.extend(record for record in records if record["source_language"] == language)
+    # Group by source language so every request stays single-language.
+    order = {language: index for index, language in enumerate(("en", "ja", "ko", "zh-Hans"))}
+    grouped = sorted(records, key=lambda record: order.get(record["source_language"], len(order)))
 
     token = CancellationToken()
-    engine = TranslationEngine(args.models_dir, model_id=args.model)
+    engine = TranslationEngine(
+        args.models_dir,
+        model_id=args.model,
+        parallel_slots=args.parallel_slots,
+        model_path_override=args.gguf_path,
+    )
     predictions, batch_stats = [], []
     try:
         engine.start(token, lambda message: print(message, flush=True))
         all_batches = list(batches(grouped))
         for batch_index, batch in enumerate(all_batches, 1):
             started = time.monotonic()
-            values, first_pass, attempts = translate_batch(engine, batch, token)
+            values, first_pass, attempts = translate_batch(
+                engine, batch, token, args.target_language
+            )
             elapsed = time.monotonic() - started
             final_success = set(values) == {record["id"] for record in batch}
             batch_stats.append(
@@ -229,6 +283,7 @@ def main() -> int:
                 predictions.append(
                     {
                         **record,
+                        "target_language": args.target_language,
                         "translation": translation,
                         "chrf": round(chrf_score(translation, record["reference_text"]), 6),
                         "token_preservation": round(
@@ -244,13 +299,22 @@ def main() -> int:
     finally:
         engine.stop()
 
-    output = args.output_dir / args.model
+    output = args.output_dir / (args.label or args.model)
     output.mkdir(parents=True, exist_ok=True)
     (output / "predictions.jsonl").write_text(
         "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in predictions), encoding="utf-8"
     )
     summary = summarize(predictions, batch_stats)
-    summary.update({"model": args.model, "dataset": str(args.dataset), "records": len(predictions)})
+    summary.update(
+        {
+            "model": args.model,
+            "gguf_path": str(args.gguf_path.resolve()) if args.gguf_path else None,
+            "target_language": args.target_language,
+            "parallel_slots": engine.parallel_slots,
+            "dataset": str(args.dataset),
+            "records": len(predictions),
+        }
+    )
     (output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (output / "batches.json").write_text(json.dumps(batch_stats, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False, indent=2))

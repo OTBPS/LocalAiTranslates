@@ -109,13 +109,37 @@ def main() -> int:
     parser.add_argument("--early-stopping-patience", type=int, default=2)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--seed", type=int, default=20260920)
+    # Adapter shape and precision are experiment variables, not constants.
+    parser.add_argument("--lora-r", type=int, default=16)
+    parser.add_argument("--lora-alpha", type=int, help="Defaults to 2 * --lora-r.")
+    parser.add_argument("--lora-dropout", type=float, default=0.05)
+    parser.add_argument(
+        "--target-modules",
+        default="all-linear",
+        help='"all-linear" or a comma-separated list such as "q_proj,k_proj,v_proj,o_proj".',
+    )
+    parser.add_argument(
+        "--rslora",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="rsLoRA scales by alpha/sqrt(r) (8.0 at r=16/alpha=32); --no-rslora uses alpha/r.",
+    )
+    parser.add_argument("--precision", choices=("nf4", "bf16"), default="nf4")
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
+    parser.add_argument("--code-version", help="Commit SHA or tree digest recorded in the manifest.")
     args = parser.parse_args()
     args.model = resolve_model_argument(args)
+    if args.lora_alpha is None:
+        args.lora_alpha = 2 * args.lora_r
 
     if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
         raise RuntimeError("QLoRA requires CUDA with BF16 support")
     if not 0 < args.validation_fraction < 0.5:
         raise ValueError("--validation-fraction must be between 0 and 0.5")
+    if args.lora_r < 1:
+        raise ValueError("--lora-r must be at least 1")
+    if args.gradient_accumulation_steps < 1:
+        raise ValueError("--gradient-accumulation-steps must be at least 1")
     audit = None
     if args.audit:
         audit = json.loads(args.audit.read_text(encoding="utf-8"))
@@ -140,15 +164,19 @@ def main() -> int:
     planned_steps = (
         args.max_steps
         if args.max_steps > 0
-        else math.ceil(len(train_dataset) / 8) * math.ceil(args.epochs)
+        else math.ceil(len(train_dataset) / args.gradient_accumulation_steps) * math.ceil(args.epochs)
     )
     warmup_steps = max(1, round(planned_steps * 0.05))
 
-    quantization = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
+    quantization = (
+        BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+        if args.precision == "nf4"
+        else None
     )
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
@@ -158,20 +186,30 @@ def main() -> int:
         attn_implementation="sdpa",
     )
     model.config.use_cache = False
-    model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+    if args.precision == "nf4":
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+    else:
+        # Full-precision LoRA: no dequantization shim, but checkpointing is still required.
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        model.enable_input_require_grads()
     if args.initial_adapter:
         model = PeftModel.from_pretrained(model, args.initial_adapter, is_trainable=True)
     else:
+        target_modules = (
+            "all-linear"
+            if args.target_modules == "all-linear"
+            else [name.strip() for name in args.target_modules.split(",") if name.strip()]
+        )
         model = get_peft_model(
             model,
             LoraConfig(
-                r=16,
-                lora_alpha=32,
-                lora_dropout=0.05,
-                target_modules="all-linear",
+                r=args.lora_r,
+                lora_alpha=args.lora_alpha,
+                lora_dropout=args.lora_dropout,
+                target_modules=target_modules,
                 bias="none",
                 task_type="CAUSAL_LM",
-                use_rslora=True,
+                use_rslora=args.rslora,
             ),
         )
     model.print_trainable_parameters()
@@ -180,7 +218,7 @@ def main() -> int:
         output_dir=str(args.output),
         per_device_train_batch_size=1,
         per_device_eval_batch_size=1,
-        gradient_accumulation_steps=8,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
         weight_decay=0.01,
         num_train_epochs=args.epochs,
@@ -240,6 +278,20 @@ def main() -> int:
         "warmup_steps": warmup_steps,
         "early_stopping_patience": args.early_stopping_patience,
         "seed": args.seed,
+        "code_version": args.code_version,
+        "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        "precision": args.precision,
+        "lora": {
+            "r": args.lora_r,
+            "alpha": args.lora_alpha,
+            "dropout": args.lora_dropout,
+            "target_modules": args.target_modules,
+            "use_rslora": args.rslora,
+            # PEFT scales by alpha/sqrt(r) under rsLoRA and alpha/r otherwise.
+            "effective_scale": round(
+                args.lora_alpha / (args.lora_r**0.5 if args.rslora else args.lora_r), 4
+            ),
+        },
         "best_model_checkpoint": trainer.state.best_model_checkpoint,
         "best_eval_loss": trainer.state.best_metric,
         "train_metrics": result.metrics,

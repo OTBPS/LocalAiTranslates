@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
 import time
 from collections import Counter, defaultdict
@@ -119,12 +120,23 @@ def aggregate(rows: list[dict]) -> dict:
     }
 
 
-def summarize(rows: list[dict], seconds: float) -> dict:
+def summarize(
+    rows: list[dict],
+    seconds: float,
+    *,
+    judge_model: str = DEFAULT_MODEL_ID,
+    batch_size: int | None = None,
+    seed: int | None = None,
+    shuffled: bool = False,
+    provisional: bool = True,
+) -> dict:
     by_language = defaultdict(list)
     by_domain = defaultdict(list)
+    by_direction = defaultdict(list)
     for row in rows:
         by_language[row["source_language"]].append(row)
         by_domain[row["domain"]].append(row)
+        by_direction[f"{row['source_language']}->{row.get('target_language', 'zh-Hans')}"].append(row)
     result = aggregate(rows)
     result.update(
         {
@@ -133,8 +145,13 @@ def summarize(rows: list[dict], seconds: float) -> dict:
                 key: aggregate(value) for key, value in sorted(by_language.items())
             },
             "by_domain": {key: aggregate(value) for key, value in sorted(by_domain.items())},
-            "judge_model": DEFAULT_MODEL_ID,
-            "judge_is_provisional": True,
+            "by_direction": {key: aggregate(value) for key, value in sorted(by_direction.items())},
+            # Report the judge that actually ran, not the module default.
+            "judge_model": judge_model,
+            "judge_batch_size": batch_size,
+            "judge_seed": seed,
+            "judge_shuffled": shuffled,
+            "judge_is_provisional": provisional,
         }
     )
     return result
@@ -147,9 +164,21 @@ def main() -> int:
     parser.add_argument("--models-dir", type=Path, default=MODEL_ROOT)
     parser.add_argument("--judge-model", choices=tuple(TRANSLATION_MODELS), default=DEFAULT_MODEL_ID)
     parser.add_argument("--batch-size", type=int, default=10)
+    parser.add_argument(
+        "--seed", type=int, help="Shuffle seed; only meaningful together with --shuffle."
+    )
+    parser.add_argument(
+        "--shuffle",
+        action="store_true",
+        help="Shuffle records before batching, to measure judge sensitivity to batch composition.",
+    )
     args = parser.parse_args()
+    if args.batch_size < 1:
+        parser.error("--batch-size must be at least 1")
 
     rows = [json.loads(line) for line in args.predictions.read_text(encoding="utf-8").splitlines()]
+    if args.shuffle:
+        random.Random(args.seed).shuffle(rows)
     token = CancellationToken()
     engine = TranslationEngine(args.models_dir, model_id=args.judge_model)
     started = time.monotonic()
@@ -170,7 +199,14 @@ def main() -> int:
     (args.output / "judged_predictions.jsonl").write_text(
         "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8"
     )
-    report = summarize(rows, elapsed)
+    report = summarize(
+        rows,
+        elapsed,
+        judge_model=args.judge_model,
+        batch_size=args.batch_size,
+        seed=args.seed if args.shuffle else None,
+        shuffled=args.shuffle,
+    )
     (args.output / "judge_summary.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
