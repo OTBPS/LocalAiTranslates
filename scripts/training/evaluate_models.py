@@ -1,4 +1,4 @@
-"""Evaluate local GGUF translation models on the immutable held-out set."""
+﻿"""Evaluate local GGUF translation models on the immutable held-out set."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from scripts.training.code_version import code_version
 from scripts.training.training_paths import MODEL_ROOT, workspace_path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -92,6 +93,58 @@ def token_preservation(source: str, candidate: str, reference: str | None = None
     kept = sum((literals & protected_tokens(candidate)).values())
     kept += len(required_numbers & set(numeric_tokens(candidate)))
     return kept / total
+
+
+def semantic_anchors(text: str) -> Counter[str]:
+    """Content that must survive any faithful translation: literals and numbers."""
+    return protected_tokens(text) + numeric_tokens(text)
+
+
+def semantic_unrelated(source: str, candidate: str, reference: str, *, min_anchors: int = 2,
+                       max_chrf: float = 0.15) -> bool:
+    """Cheap first-pass screen for an output unrelated to its own input.
+
+    True when the source carries several content anchors, the candidate keeps
+    none of them, and the candidate is also far from the human reference.
+    A badly worded but on-topic translation can trip this, so
+    `semantic_unrelated_ids` confirms with a second, global check.
+    """
+    anchors = semantic_anchors(source)
+    if sum(anchors.values()) < min_anchors:
+        return False
+    if sum((anchors & semantic_anchors(candidate)).values()):
+        return False
+    return chrf_score(candidate, reference) < max_chrf
+
+
+def semantic_unrelated_ids(predictions: list[dict], *, margin: float = 0.05) -> list[str]:
+    """Per-sample hallucination detection, confirmed against the whole set.
+
+    `semantic_alignment_flags` only compares rows inside one batch, so a block
+    swapped in from a different batch matches no sibling there and slips
+    through. Here a screened candidate is reported only when some *other*
+    record's reference explains it better than its own, ignoring records that
+    share the same reference text (the eval set holds one Chinese reference per
+    news item across three source languages).
+    """
+    screened = [
+        row for row in predictions
+        if semantic_unrelated(row["source_text"], row["translation"], row["reference_text"])
+    ]
+    flagged = []
+    for row in screened:
+        own = chrf_score(row["translation"], row["reference_text"])
+        own_reference = "".join(row["reference_text"].split())
+        best = 0.0
+        for other in predictions:
+            if other["id"] == row["id"]:
+                continue
+            if "".join(other["reference_text"].split()) == own_reference:
+                continue
+            best = max(best, chrf_score(row["translation"], other["reference_text"]))
+        if best - own >= margin:
+            flagged.append(row["id"])
+    return sorted(flagged)
 
 
 def unexpected_repetitions(candidate: str, reference: str) -> int:
@@ -178,6 +231,7 @@ def summarize(predictions: list[dict], batch_stats: list[dict]) -> dict:
         by_language[row["source_language"]].append(row)
         by_domain[row["domain"]].append(row)
     alignment = semantic_alignment_flags(predictions, batch_stats)
+    unrelated_ids = semantic_unrelated_ids(predictions)
 
     def aggregate(rows):
         return {
@@ -205,6 +259,10 @@ def summarize(predictions: list[dict], batch_stats: list[dict]) -> dict:
             "semantic_block_alignment_rate": round(sum(alignment.values()) / count, 4),
             "suspected_misaligned_ids": sorted(record_id for record_id, ok in alignment.items() if not ok),
             "cross_record_duplicate_outputs": cross_record_duplicates,
+            # Per-sample hallucination check; catches output unrelated to its own
+            # input even when no sibling in the batch matches it either.
+            "semantic_unrelated_outputs": len(unrelated_ids),
+            "semantic_unrelated_ids": unrelated_ids,
             "translation_seconds": round(sum(row["seconds"] for row in batch_stats), 3),
             "records_per_second": round(count / max(0.001, sum(row["seconds"] for row in batch_stats)), 3),
             "by_language": {key: aggregate(value) for key, value in sorted(by_language.items())},
@@ -313,6 +371,8 @@ def main() -> int:
             "parallel_slots": engine.parallel_slots,
             "dataset": str(args.dataset),
             "records": len(predictions),
+            # Read from the repository, never hand-typed.
+            "code_version": code_version(),
         }
     )
     (output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

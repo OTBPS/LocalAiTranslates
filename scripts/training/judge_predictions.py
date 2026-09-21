@@ -1,4 +1,4 @@
-"""Use the local 14B model to grade held-out translations against human references."""
+﻿"""Use the local 14B model to grade held-out translations against human references."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from scripts.training.code_version import code_version
 from scripts.training.training_paths import MODEL_ROOT
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -152,6 +153,8 @@ def summarize(
             "judge_seed": seed,
             "judge_shuffled": shuffled,
             "judge_is_provisional": provisional,
+            # Read from the repository, never hand-typed.
+            "code_version": code_version(),
         }
     )
     return result
