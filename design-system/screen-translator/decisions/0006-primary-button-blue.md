@@ -18,7 +18,7 @@ the ratio and fails the build.
   annotated "Apple system colour". Honest about the source, but it converts
   a hard gate into a list of things that do not have to pass it. The list
   only ever grows.
-- **(b)** Fill with `#0066DB`. White text measures **4.62:1** ✓ AA. The two
+- **(b)** Fill with `#0066DB`. White text measures **5.35:1** ✓ AA. The two
   blues are practically indistinguishable side by side.
 - **(c)** Dark text on a blue fill. Passes, and looks nothing like the
   target direction.

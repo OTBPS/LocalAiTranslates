@@ -2,7 +2,7 @@
 
 All notable user-visible changes are recorded here. Versions follow semantic versioning.
 
-## Unreleased
+## 0.8.0
 
 ### Capture
 

@@ -64,7 +64,7 @@ repository permitted to contain a colour literal.** A test enforces it.
 | `accent_fill` | `#0066DB` | `#0A84FF` |
 | `accent_text` | `#007AFF` | `#0A84FF` |
 | `critical` | `#D70015` | `#FF453A` |
-| `success` | `#248A3D` | `#30D158` |
+| `success` | `#1F7A35` | `#30D158` |
 | `caution` | `#8F5A00` | `#FFD60A` |
 
 `accent_fill` is not Apple's `#007AFF`; see
