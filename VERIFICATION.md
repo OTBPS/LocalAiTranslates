@@ -74,9 +74,12 @@
 - **文本翻译页的「翻译」按钮在默认窗口尺寸下位于折叠线以下**，截图页则留了一大片空白。根因不是编辑框最小高度（文本页自身 `minimumSizeHint` 只有 509，视口 761），而是 `QTabWidget.minimumSizeHint` 取所有页面的最大值：系统设置页真实需要 819，这个下限泄漏到了每一页，把文本页撑到 808。**量过才发现这不是本次间距改动造成的**——旧的构成主义间距下按钮在 956，改版反而好了 53 px，只是没修好。改为每页各自持有 `QScrollArea` 后，820×840 下截图页与文本页均无需滚动，系统设置页滚 183 px。页头、通知横幅、标签栏留在滚动区之外（横幅报的是三页共用的页脚按钮，让它滚走等于把当初的缺陷换个地方再犯）。
 - **构建前置检查经受了一次真实检验**：重打时已安装的 0.7.0 正在 `Install test\` 下运行，前置检查正确放行——它匹配的是 `dist\<载荷>`，不是项目根目录。
 
-### 已确认但尚未修复的缺陷
+### 已修复：更新版本的配置会静默杀死应用
 
-- **更新版本的配置会让应用静默死掉，而不是给出提示。** `Config._migrate` 在 `version > CURRENT_CONFIG_VERSION` 时抛裸 `ValueError`，而 `Config.load()` 的 `except` 只捕获 `(JSONDecodeError, UnicodeDecodeError, TypeError)`——`JSONDecodeError` 是 `ValueError` 的子类，反过来不成立。异常穿过 `ConfigStore.__init__` → `Controller.__init__` → `app.main()` 无人接管。后果是双击应用毫无反应：没有弹窗，也没有日志，因为 `configure_logging()` 在读配置之后才执行。对一个存在意义就是"告诉用户去升级"的保护机制而言，这是最差的失败形态。实测复现：写一个 version 6 的配置交给 version 5 读取即抛出。该缺陷在 0.7.0 与 0.8.0 中同样存在，本次未修。
+- **更新版本的配置会让应用静默死掉，而不是给出提示。** `Config._migrate` 在 `version > CURRENT_CONFIG_VERSION` 时抛裸 `ValueError`，而 `Config.load()` 的 `except` 只捕获 `(JSONDecodeError, UnicodeDecodeError, TypeError)`——`JSONDecodeError` 是 `ValueError` 的子类，反过来不成立。异常穿过 `ConfigStore.__init__` → `Controller.__init__` → `app.main()` 无人接管。后果是双击应用毫无反应：没有弹窗，也没有日志，因为 `configure_logging()` 在读配置之后才执行。对一个存在意义就是"告诉用户去升级"的保护机制而言，这是最差的失败形态。实测复现：写一个 version 6 的配置交给 version 5 读取即抛出。该缺陷在 0.7.0 与 0.8.0 中同样存在。
+
+  **已修**：新增具名异常 `ConfigTooNew`，`Config.load` 明确放行它（文件完好、装着用户的设置，挪走或覆盖正是版本检查要拒绝的那种静默降级），由 `app.main` 在取单实例锁之前捕获、弹出同时写明两个版本号的对话框、返回 1。同时把 `ValueError` 加进 `load()` 的损坏分支——`_migrate` 对非法版本号（`"abc"`、`0`、`-1`、`1.5`）也抛 `ValueError`，那属于损坏，之前同样会逃出去杀死进程，现在走备份重建。
+  拿**你机器上真实的 v5 配置**做过验证：以 v4 应用的身份读取，被具名拒绝，文件未被移动也未被改写，没有产生 `.corrupt-*` 副本。
 
 ### 仍待真机目视确认
 

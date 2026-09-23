@@ -4,10 +4,10 @@ from pathlib import Path
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QFontDatabase
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from . import design
-from .core import local_dir
+from .core import Config, ConfigTooNew, local_dir
 from .instance import InstanceCoordinator
 from .native import app_theme_is_light
 from .settings import Settings
@@ -48,6 +48,17 @@ def main():
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("ScreenTranslator")
     app.setApplicationVersion(__version__)
+    # Before the lock, the tray and the engines: a configuration from a
+    # newer version cannot be used, and the whole point of refusing it
+    # is to say so. This used to raise an unhandled ValueError from deep
+    # inside Controller, so the application died before logging was
+    # configured -- no window, no dialog, no log line.
+    try:
+        Config.load()
+    except ConfigTooNew as error:
+        QMessageBox.critical(None, "屏译", str(error))
+        return 1
+
     command = "show-settings" if "--show-settings" in sys.argv else "ping"
     coordinator = InstanceCoordinator(local_dir())
     if not coordinator.acquire_or_notify(command):

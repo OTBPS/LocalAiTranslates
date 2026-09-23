@@ -79,6 +79,11 @@ All notable user-visible changes are recorded here. Versions follow semantic ver
 - Fixed a Tailscale connection being reported as relayed when it was direct.
 - Configuration migrates to version 5. Migration is additive; a version 5 file is still refused by
   older builds.
+- A configuration written by a newer version now says so. It was already refused, correctly, but the
+  refusal escaped as an unhandled error and the application simply never appeared — no window and no
+  message. You now get a dialog naming both versions, and your settings file is left untouched.
+- A configuration whose version number is damaged is repaired like any other corrupt file instead of
+  stopping the application.
 
 ## 0.7.0
 

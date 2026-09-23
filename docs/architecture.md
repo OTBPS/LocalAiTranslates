@@ -300,7 +300,17 @@ unsaved edits survive repeated shortcut launches.
 
 ## Configuration
 
-Configuration migrations are sequential and normalize every persisted field. Invalid JSON is moved to a timestamped `config.corrupt-*` file and safe defaults are loaded. A configuration created by a newer application version is rejected rather than silently downgraded.
+Configuration migrations are sequential and normalize every persisted field. Invalid JSON — and a
+version that is not a positive integer — is moved to a timestamped `config.corrupt-*` file and safe
+defaults are loaded.
+
+A configuration created by a newer application version is a different case and must not take that
+path: the file is intact and holds someone's settings, so moving it aside or writing defaults over
+it *is* the silent downgrade the check exists to refuse. `Config.load` therefore lets `ConfigTooNew`
+propagate, and `app.main` catches it before the single-instance lock, reports both versions in a
+dialog, and exits. The distinction matters because `json.JSONDecodeError` is a subclass of
+`ValueError` and the two used to be conflated, which meant the refusal escaped as an unhandled
+exception and killed the process before logging was configured — no window, no dialog, no log.
 
 Version 4 adds the cross-device fields. Migration is additive, so an existing single-device installation upgrades with its behaviour unchanged. `core` validates them structurally — URL shape, IP parsing, port range, secret length — while whether an address is on the tailnet is policy and stays in `remote.access`; that separation is what keeps the configuration layer independent of the networking layer. A remote mode without both an address and a secret is repaired to local, because the alternative is an installation that cannot capture at all.
 

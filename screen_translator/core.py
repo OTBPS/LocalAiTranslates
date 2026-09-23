@@ -260,6 +260,27 @@ def normalize_allowed_peers(value: object) -> tuple[str, ...]:
     return tuple(peers[:MAX_ALLOWED_PEERS])
 
 
+class ConfigTooNew(ValueError):
+    """A configuration written by a later version of the application.
+
+    Not corruption: the file is well formed and someone's settings are
+    in it. Moving it aside or loading defaults over it would be exactly
+    the silent downgrade the version check exists to prevent, so this
+    propagates out of `Config.load` for the composition root to report.
+
+    A `ValueError` subclass because that is what it was before it had a
+    name, and callers that catch one still work.
+    """
+
+    def __init__(self, found: int, supported: int):
+        super().__init__(
+            f"配置由更新版本创建（配置 v{found}，本程序支持到 v{supported}）。"
+            "请升级屏译，或还原一份旧版本的配置备份。"
+        )
+        self.found = found
+        self.supported = supported
+
+
 @dataclass
 class Config:
     version: int = CURRENT_CONFIG_VERSION
@@ -304,7 +325,7 @@ class Config:
         if not isinstance(version, int) or isinstance(version, bool) or version < 1:
             raise ValueError("配置版本无效")
         if version > CURRENT_CONFIG_VERSION:
-            raise ValueError("配置由更新版本创建，请升级应用")
+            raise ConfigTooNew(version, CURRENT_CONFIG_VERSION)
         if version == 1:
             data.setdefault("source_language", "auto")
             data.setdefault("target_language", "zh-Hans")
@@ -428,7 +449,17 @@ class Config:
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
             data = cls._migrate(raw)
-        except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        except ConfigTooNew:
+            # Deliberately not handled here. The file is intact and
+            # holds someone's settings; renaming it aside would be the
+            # downgrade this check exists to refuse.
+            raise
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+            # Everything else is damage -- unparseable JSON, a root that
+            # is not an object, a version that is not a positive integer.
+            # ValueError is listed explicitly because `_migrate` raises
+            # one for a nonsense version, and that used to escape and
+            # kill the process instead of being repaired.
             backup = path.with_name(f"{path.stem}.corrupt-{int(time.time())}{path.suffix}")
             path.replace(backup)
             return cls()
