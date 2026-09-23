@@ -104,6 +104,40 @@ def controller(tmp_path, monkeypatch):
         subject.quit()
 
 
+def test_the_real_settings_window_can_be_built_during_startup(tmp_path, monkeypatch):
+    """The construction order, checked against the window that depends on it.
+
+    `FakeSettings` reads almost nothing, so it could not notice that the
+    real window calls `occupancy()` while building its text-translation
+    page -- and that `downloads`, which `occupancy()` reads, was created
+    two statements later. The application could not start at all.
+    """
+    from screen_translator.settings import Settings
+
+    store = ConfigStore(Config(model_dir=str(tmp_path)), writer=lambda _config: None)
+    monkeypatch.setattr(
+        "screen_translator.controller.ConfigStore", lambda **_kwargs: store
+    )
+    monkeypatch.setattr(QTimer, "singleShot", lambda _delay, _callback: None)
+    backend = FakeBackend()
+    subject = Controller(
+        QApplication.instance(),
+        Settings,
+        backend_factory=lambda _config: backend,
+        hotkey_factory=FakeHotkeys,
+        task_runner=TaskRunner(),
+        show_settings_when_models_missing=False,
+    )
+    try:
+        subject.settings.refresh()
+        subject.settings.load_config()
+        assert subject.settings.tabs.count() == 3
+    finally:
+        subject.app = SimpleNamespace(quit=Mock())
+        subject.quit()
+        subject.settings.close()
+
+
 def test_startup_wires_configuration_backend_and_shortcut(controller):
     subject, backend, store = controller
 
@@ -112,7 +146,7 @@ def test_startup_wires_configuration_backend_and_shortcut(controller):
     assert subject.ocr is backend.ocr
     assert subject.translator is backend.translator
     assert subject.hotkey.current == store.current.hotkey
-    assert subject.readiness_timer.isActive()
+    assert subject.backends.polling
 
 
 def test_configuration_changes_reach_the_settings_window(controller):
@@ -145,6 +179,6 @@ def test_quit_stops_the_timer_the_shortcut_and_the_backend(controller):
 
     subject.quit()
 
-    assert subject.readiness_timer.isActive() is False
+    assert subject.backends.polling is False
     assert subject.hotkey.closed is True
     assert backend.stopped is True

@@ -12,6 +12,7 @@ from screen_translator.controller import Controller
 from screen_translator.core import Config
 from screen_translator.feedback import Occupancy
 from screen_translator.settings import Settings
+from screen_translator.tray import TrayIcon
 
 
 def qt_app():
@@ -43,17 +44,37 @@ def fake_controller(tmp_path, **overrides):
 
 def test_tray_menu_places_exit_after_settings_and_language_pair():
     qt_app()
-    state = SimpleNamespace(show_settings=Mock(), request_quit=Mock())
-    menu = Controller._build_tray_menu(state)
-    actions = menu.actions()
+    tray = TrayIcon()
+    settings, languages, quit_ = Mock(), Mock(), Mock()
+    tray.settings_requested.connect(settings)
+    tray.languages_requested.connect(languages)
+    tray.quit_requested.connect(quit_)
+
+    actions = tray.menu.actions()
     assert [action.text() for action in actions if not action.isSeparator()] == ["设置", "", "退出"]
     assert actions[1].isSeparator()
     assert actions[2].isEnabled()
     assert actions[3].isSeparator()
+
+    actions[0].trigger()
+    settings.assert_called_once()
     actions[2].trigger()
-    state.show_settings.assert_called_once_with(focus_language=True)
+    languages.assert_called_once()
     actions[4].trigger()
-    state.request_quit.assert_called_once()
+    quit_.assert_called_once()
+
+
+def test_the_tray_shows_the_shortcut_and_the_language_pair():
+    qt_app()
+    tray = TrayIcon()
+
+    tray.describe("Ctrl+Alt+T", "英语 → 简体中文")
+
+    # The tray is the only always-visible surface, so it is where "what
+    # will the hotkey actually do" has to be legible without opening
+    # anything.
+    assert tray.language_action.text() == "英语 → 简体中文"
+    assert tray.icon.toolTip() == "屏译 · Ctrl+Alt+T · 英语 → 简体中文"
 
 
 def test_tray_exit_reuses_settings_confirmation():

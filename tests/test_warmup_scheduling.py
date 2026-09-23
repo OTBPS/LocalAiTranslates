@@ -5,33 +5,42 @@ tick was re-warming every time, which locally is a cheap no-op but remotely
 became an HTTP round trip and a host log line every 15 seconds.
 """
 
+import os
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from screen_translator.controller import Controller
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
+from screen_translator.backend_service import BackendService
 from screen_translator.core import Cancelled, Config
 
 
-def state(ready=True, warmup=None):
-    return SimpleNamespace(
-        config=Config(source_language="en"),
-        backend=SimpleNamespace(ready=lambda: ready, refresh=Mock()),
+def service(ready=True, warmup=None, config=None):
+    backend = SimpleNamespace(
+        ready=lambda: ready,
+        refresh=Mock(),
+        stop=Mock(),
+        kind="local",
         ocr=SimpleNamespace(warmup=warmup or Mock()),
-        tasks=SimpleNamespace(start=lambda target, name: target()),
-        ocr_warmup_token=None,
-        readiness_token=None,
-        warmup_completed=False,
+        translator=SimpleNamespace(),
     )
+    subject = BackendService(
+        factory=lambda _config: backend,
+        config_provider=lambda: config or Config(source_language="en"),
+        tasks=SimpleNamespace(start=lambda target, name: target()),
+        notices=Mock(),
+    )
+    return subject, backend
 
 
 def test_repeated_ticks_warm_up_only_once():
-    context = state()
+    subject, backend = service()
 
     for _ in range(5):
-        Controller.schedule_ocr_warmup(context)
+        subject.warm_up()
 
-    assert context.ocr.warmup.call_count == 1
-    assert context.warmup_completed is True
+    assert backend.ocr.warmup.call_count == 1
+    assert subject.warmed is True
 
 
 def test_a_failed_warm_up_is_retried_on_the_next_tick():
@@ -42,70 +51,116 @@ def test_a_failed_warm_up_is_retried_on_the_next_tick():
         if len(attempts) < 3:
             raise RuntimeError("远程主机不可用")
 
-    context = state(warmup=failing)
+    subject, _backend = service(warmup=failing)
 
     for _ in range(5):
-        Controller.schedule_ocr_warmup(context)
+        subject.warm_up()
 
     # Retries until it succeeds, then stops.
     assert len(attempts) == 3
-    assert context.warmup_completed is True
+    assert subject.warmed is True
 
 
 def test_a_cancelled_warm_up_does_not_count_as_completed():
     def cancelled(source_language, token, progress):
         raise Cancelled()
 
-    context = state(warmup=cancelled)
+    subject, _backend = service(warmup=cancelled)
 
-    Controller.schedule_ocr_warmup(context)
+    subject.warm_up()
 
-    assert context.warmup_completed is False
+    assert subject.warmed is False
 
 
 def test_nothing_is_warmed_while_the_backend_is_not_ready():
-    context = state(ready=False)
+    subject, backend = service(ready=False)
 
-    Controller.schedule_ocr_warmup(context)
+    subject.warm_up()
 
-    context.ocr.warmup.assert_not_called()
-    assert context.warmup_completed is False
+    backend.ocr.warmup.assert_not_called()
+    assert subject.warmed is False
 
 
 def test_the_readiness_tick_refreshes_and_warms():
-    context = state()
-    context.refresh_readiness = lambda: Controller.refresh_readiness(context)
-    context.schedule_ocr_warmup = lambda: Controller.schedule_ocr_warmup(context)
+    subject, backend = service()
 
-    Controller.on_readiness_tick(context)
+    subject.poll()
 
-    context.backend.refresh.assert_called_once()
-    assert context.ocr.warmup.call_count == 1
+    backend.refresh.assert_called_once()
+    assert backend.ocr.warmup.call_count == 1
 
-    Controller.on_readiness_tick(context)
+    subject.poll()
 
     # Readiness keeps being polled; warm-up does not repeat.
-    assert context.backend.refresh.call_count == 2
-    assert context.ocr.warmup.call_count == 1
+    assert backend.refresh.call_count == 2
+    assert backend.ocr.warmup.call_count == 1
 
 
 def test_replacing_the_backend_allows_warming_the_new_one():
-    context = state()
-    Controller.schedule_ocr_warmup(context)
-    assert context.warmup_completed is True
+    warmups = []
 
-    context.manual = Mock()
-    context.tray = Mock()
-    context._backend_factory = lambda _config: SimpleNamespace(
-        ready=lambda: True, refresh=Mock(), ocr=SimpleNamespace(warmup=Mock())
+    def make(_config):
+        warmup = Mock()
+        warmups.append(warmup)
+        return SimpleNamespace(
+            ready=lambda: True,
+            refresh=Mock(),
+            stop=Mock(),
+            kind="local",
+            ocr=SimpleNamespace(warmup=warmup),
+            translator=SimpleNamespace(),
+        )
+
+    subject = BackendService(
+        factory=make,
+        config_provider=Config,
+        tasks=SimpleNamespace(start=lambda target, name: target()),
+        notices=Mock(),
     )
-    context.apply_host_service = Mock()
-    context.schedule_ocr_warmup = Mock()
-    context.backend = SimpleNamespace(
-        ready=lambda: True, refresh=Mock(), stop=Mock(), ocr=SimpleNamespace(warmup=Mock())
+    subject.warm_up()
+    assert subject.warmed is True
+
+    subject.replace()
+
+    # New weights, new warm-up -- the flag belongs to the backend, not the
+    # process.
+    assert len(warmups) == 2
+    warmups[1].assert_called_once()
+    assert subject.warmed is True
+
+
+def test_changing_the_source_language_makes_the_engine_cold_again():
+    subject, backend = service()
+    subject.warm_up()
+
+    subject.reset_warmup()
+
+    # OCR weights are per-language; a warm English engine is no use for
+    # Japanese.
+    assert subject.warmed is False
+    subject.warm_up()
+    assert backend.ocr.warmup.call_count == 2
+
+
+def test_a_readiness_refresh_already_running_is_not_started_twice():
+    started = []
+    backend = SimpleNamespace(
+        ready=lambda: True,
+        refresh=Mock(),
+        stop=Mock(),
+        kind="local",
+        ocr=SimpleNamespace(warmup=Mock()),
+        translator=SimpleNamespace(),
+    )
+    subject = BackendService(
+        factory=lambda _config: backend,
+        config_provider=Config,
+        # Never runs the work, so the token stays outstanding.
+        tasks=SimpleNamespace(start=lambda target, name: started.append(name)),
+        notices=Mock(),
     )
 
-    Controller.replace_engines(context)
+    subject.refresh_readiness()
+    subject.refresh_readiness()
 
-    assert context.warmup_completed is False
-    context.schedule_ocr_warmup.assert_called_once()
+    assert started == ["backend-readiness"]

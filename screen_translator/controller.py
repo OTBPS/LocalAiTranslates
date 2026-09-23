@@ -9,9 +9,10 @@ from dataclasses import replace
 
 from PySide6.QtCore import QObject, QRect, QTimer, Signal
 from PySide6.QtGui import QCursor
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
+from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
 from .backend import Backend, create_backend
+from .backend_service import BackendService
 from .capture import (
     CaptureCommand,
     CapturePipeline,
@@ -27,14 +28,7 @@ from .capture import (
 )
 from .config_store import ConfigStore
 from .contracts import OcrPort, RendererPort, TranslationPort
-from .core import (
-    LANGUAGE_NAMES,
-    TARGET_LANGUAGES,
-    CancellationToken,
-    Cancelled,
-    Config,
-    swap_language_pair,
-)
+from .core import Cancelled, Config
 from .downloads import DownloadCoordinator
 from .feedback import (
     Notice,
@@ -48,6 +42,7 @@ from .feedback.sinks import TraySink
 from .graphics import OverlayRenderer, ScreenShot, capture_region, to_bgr
 from .hotkeys import HotkeyService
 from .inference import InferenceCoordinator
+from .languages import LanguageService
 from .logging_setup import configure_logging
 from .manual_translation import ManualTranslationController
 from .navigation import Destination
@@ -56,14 +51,9 @@ from .remote.host import HostService
 from .remote.service import ServiceState
 from .session import CaptureSession, SessionState
 from .tasks import TaskRunner
-from .theme import create_app_icon
+from .tray import TrayIcon
 
 LOGGER = logging.getLogger(__name__)
-
-# How often background readiness is re-checked.  The local backend reads the
-# model registry and the remote backend pings the host; both are cheap, and
-# polling is what lets a client notice that the host came back online.
-READINESS_INTERVAL_MS = 15000
 
 
 class Events(QObject):
@@ -100,28 +90,58 @@ class Controller(QObject):
         # store so nothing has to reload a whole form to stay in sync.
         self.configuration = ConfigStore(parent=self)
         configure_logging(self.config.log_level)
-        self._backend_factory = backend_factory
         self._renderer_factory = renderer_factory
         self.tasks = task_runner or TaskRunner()
         self.events = Events()
         self.session = CaptureSession()
-        self.detected_source_language: str | None = None
-        self.backend = self._backend_factory(self.config)
+        self.languages = LanguageService(self.configuration, self.occupancy, self)
         # One shared inference slot; the provider indirection keeps engine swaps visible.
         self.inference = InferenceCoordinator(lambda: self.translator)
         self.manual = ManualTranslationController(self.inference, self.tasks, self)
+
+        self.tray = TrayIcon(parent=self)
+        self.tray.settings_requested.connect(self.show_settings)
+        self.tray.languages_requested.connect(
+            lambda: self.show_settings(focus_language=True)
+        )
+        self.tray.quit_requested.connect(self.request_quit)
+        self.tray.show()
+
+        # One entry point for everything the application says. Surfaces
+        # register themselves; callers describe the message, not its shape.
+        # Built before anything that reports, so no start-up failure has to
+        # find its own way to a surface.
+        self.notices = NoticeCenter(self)
+        self.notices.register_sink(TraySink(self.tray.icon))
+        self.notices.action_invoked.connect(self.on_notice_action)
+
+        self.backends = BackendService(
+            factory=backend_factory,
+            config_provider=lambda: self.config,
+            tasks=self.tasks,
+            notices=self.notices,
+            stop_work=self.manual.cancel,
+            parent=self,
+        )
+        self.backends.changed.connect(self.apply_host_service)
+        self.languages.source_changed.connect(self.backends.reset_warmup)
+        self.languages.source_changed.connect(self.backends.warm_up)
+        self.languages.changed.connect(self.refresh_language_actions)
         self.host_service = HostService(
             ocr_provider=lambda: self.ocr,
-            ready_provider=lambda: self.backend.ready(),
+            ready_provider=self.backends.ready,
             model_provider=lambda: self.config.translation_model,
             inference=self.inference,
             tasks=self.tasks,
         )
-        self.ocr_warmup_token = None
-        self.readiness_token = None
-        self.warmup_completed = False
+
+        self.downloads = DownloadCoordinator(
+            tasks=self.tasks, notices=self.notices, parent=self
+        )
+        self.downloads.changed.connect(self.on_download_changed)
+        self.downloads.completed.connect(self.on_download_completed)
+
         self.overlays: list[Overlay] = []
-        self.settings = settings_factory(self)
         self.capture = None
         self.result = None
         self.outcome = None
@@ -132,31 +152,13 @@ class Controller(QObject):
         self.screens: list[ScreenShot] = []
         self.cursor_point = QCursor.pos()
 
-        self.tray = QSystemTrayIcon(create_app_icon(), self)
-        self.tray.setToolTip("屏译 · Ctrl+Alt+T")
-        menu = self._build_tray_menu()
-        self.tray.setContextMenu(menu)
-        self.tray.activated.connect(
-            lambda reason: (
-                self.show_settings() if reason == QSystemTrayIcon.ActivationReason.DoubleClick else None
-            )
-        )
-        self.tray.show()
-
-        # One entry point for everything the application says. Surfaces
-        # register themselves; callers describe the message, not its shape.
-        self.notices = NoticeCenter(self)
-        self.notices.register_sink(TraySink(self.tray))
+        # Last, because the window reads the whole surface above while it
+        # builds itself -- `occupancy()` in particular, which is how a
+        # missing `downloads` turned into a crash on start-up.
+        self.settings = settings_factory(self)
         register_banner = getattr(self.settings, "register_notice_sinks", None)
         if register_banner is not None:
             register_banner(self.notices)
-        self.notices.action_invoked.connect(self.on_notice_action)
-
-        self.downloads = DownloadCoordinator(
-            tasks=self.tasks, notices=self.notices, parent=self
-        )
-        self.downloads.changed.connect(self.on_download_changed)
-        self.downloads.completed.connect(self.on_download_completed)
 
         self.hotkey = hotkey_factory(app, self.toggle)
         try:
@@ -187,31 +189,35 @@ class Controller(QObject):
         if hasattr(self.settings, "exit_requested"):
             self.settings.exit_requested.connect(self.quit)
         self.refresh_language_actions()
-        self.readiness_timer = QTimer(self)
-        self.readiness_timer.setInterval(READINESS_INTERVAL_MS)
-        self.readiness_timer.timeout.connect(self.on_readiness_tick)
-        self.readiness_timer.start()
-        self.refresh_readiness()
+        self.backends.start()
         self.apply_host_service()
         if show_settings_when_models_missing and not self.backend.ready():
             QTimer.singleShot(0, self.show_settings)
         elif self.backend.ready():
-            QTimer.singleShot(1000, self.schedule_ocr_warmup)
+            QTimer.singleShot(1000, self.backends.warm_up)
 
     @property
     def config(self) -> Config:
         return self.configuration.current
 
-    # The engines are reached through the backend so that swapping local for
-    # remote is one assignment; everything that used to read ``self.ocr``
-    # keeps working unchanged.
+    # The engines are reached through the backend service so that swapping
+    # local for remote is one assignment; everything that used to read
+    # ``self.ocr`` keeps working unchanged.
+    @property
+    def backend(self) -> Backend:
+        return self.backends.backend
+
     @property
     def ocr(self) -> OcrPort:
-        return self.backend.ocr
+        return self.backends.ocr
 
     @property
     def translator(self) -> TranslationPort:
-        return self.backend.translator
+        return self.backends.translator
+
+    @property
+    def detected_source_language(self) -> str | None:
+        return self.languages.detected
 
     @property
     def generation(self) -> int:
@@ -230,36 +236,8 @@ class Controller(QObject):
         return self.session.busy
 
     def replace_engines(self) -> None:
-        if self.ocr_warmup_token:
-            self.ocr_warmup_token.cancel()
-            self.ocr_warmup_token = None
-        self.warmup_completed = False
-        self.manual.cancel()
-        try:
-            replacement = self._backend_factory(self.config)
-        except Exception as error:
-            # Keep the working backend rather than tearing it down for one
-            # that could not be built; a remote backend in particular cannot
-            # be reused once its session is closed.
-            LOGGER.warning("Backend selection failed: %s", type(error).__name__)
-            self.notices.post(
-                error_notice(
-                    "backend-unavailable",
-                    "后端不可用",
-                    detail=str(error),
-                    context="settings",
-                    actions=(
-                        NoticeAction(
-                            "open-remote", "检查跨设备设置", Destination.REMOTE_MODE, primary=True
-                        ),
-                    ),
-                )
-            )
-            return
-        previous, self.backend = self.backend, replacement
-        previous.stop()
-        self.apply_host_service()
-        self.schedule_ocr_warmup()
+        """Rebuild the engines from the saved configuration."""
+        self.backends.replace()
 
     def apply_host_service(self) -> None:
         """Reconcile the listener with the current configuration."""
@@ -282,72 +260,6 @@ class Controller(QObject):
             self.notices.revoke("host-service-failed")
         self.settings.refresh()
 
-    def on_readiness_tick(self) -> None:
-        """Periodic UI-thread check.
-
-        Both steps are idempotent and read only cached state, so this also
-        covers the case that matters for remote mode: a host that was offline
-        at start-up becomes usable without the user restarting anything.
-        """
-        self.refresh_readiness()
-        self.schedule_ocr_warmup()
-
-    def refresh_readiness(self) -> None:
-        """Re-check backend readiness off the UI thread."""
-        if self.readiness_token:
-            return
-        token = CancellationToken()
-        self.readiness_token = token
-
-        def run():
-            try:
-                self.backend.refresh()
-            except Exception as error:
-                LOGGER.debug("Readiness refresh failed: %s", type(error).__name__)
-            finally:
-                if self.readiness_token is token:
-                    self.readiness_token = None
-
-        self.tasks.start(run, name="backend-readiness")
-
-    def schedule_ocr_warmup(self) -> None:
-        # Warm up once per backend, not once per readiness tick. Locally a
-        # repeat is a cheap no-op, but a remote backend turns every tick into
-        # an HTTP round trip and a line in the host log. A failure leaves the
-        # flag clear so the next tick retries, which is how a client recovers
-        # when the host comes back.
-        if self.ocr_warmup_token or self.warmup_completed or not self.backend.ready():
-            return
-        token = CancellationToken()
-        self.ocr_warmup_token = token
-        source_language = self.config.source_language
-
-        def run():
-            try:
-                self.ocr.warmup(source_language, token, lambda _message: None)
-                self.warmup_completed = True
-            except Cancelled:
-                pass
-            except Exception as error:
-                LOGGER.warning("OCR warm-up failed: %s", type(error).__name__)
-            finally:
-                if self.ocr_warmup_token is token:
-                    self.ocr_warmup_token = None
-
-        self.tasks.start(run, name="ocr-warmup")
-
-    def _build_tray_menu(self) -> QMenu:
-        menu = QMenu()
-        menu.addAction("设置", self.show_settings)
-        menu.addSeparator()
-        self.language_action = menu.addAction("")
-        self.language_action.triggered.connect(
-            lambda _checked=False: self.show_settings(focus_language=True)
-        )
-        menu.addSeparator()
-        menu.addAction("退出", self.request_quit)
-        return menu
-
     def request_quit(self) -> None:
         """Use the same confirmation path for the settings window and tray menu."""
         self.settings.confirm_exit()
@@ -368,72 +280,34 @@ class Controller(QObject):
         self.show_settings()
 
     def language_pair_text(self) -> str:
-        source = LANGUAGE_NAMES[self.config.source_language]
-        if self.config.source_language == "auto" and self.detected_source_language:
-            source += f"（{LANGUAGE_NAMES[self.detected_source_language]}）"
-        return f"{source} → {LANGUAGE_NAMES[self.config.target_language]}"
+        return self.languages.describe()
 
     def refresh_language_actions(self) -> None:
-        if not hasattr(self, "language_action"):
-            return
-        self.language_action.setText(self.language_pair_text())
-        self.tray.setToolTip(f"屏译 · {self.config.hotkey} · {self.language_pair_text()}")
+        """Repeat the language pair wherever it is on show."""
+        self.tray.describe(self.config.hotkey, self.languages.describe())
         if hasattr(self, "settings"):
             self.settings.refresh()
 
     def swap_languages(self) -> None:
         if self.occupancy().busy:
             return
-        pair = swap_language_pair(
-            self.config.source_language,
-            self.config.target_language,
-            self.detected_source_language,
-        )
-        if not pair:
-            self.notices.post(
-                Notice(
-                    "language-swap-unavailable",
-                    Severity.WARNING,
-                    "无法对调语言",
-                    detail="自动识别需先完成一次识别，且输入输出语言不能相同",
-                    context="settings",
-                    actions=(
-                        NoticeAction(
-                            "open-languages", "选择语言", Destination.CAPTURE_LANGUAGES
-                        ),
-                    ),
-                )
-            )
+        if self.languages.swap():
             return
-        # No `settings.load_config()` here: reloading the whole form to keep
-        # one pair of combo boxes in sync silently discarded every unsaved
-        # edit in the window. The store announces the change instead.
-        self.set_language_pair(*pair)
+        self.notices.post(
+            Notice(
+                "language-swap-unavailable",
+                Severity.WARNING,
+                "无法对调语言",
+                detail="自动识别需先完成一次识别，且输入输出语言不能相同",
+                context="settings",
+                actions=(
+                    NoticeAction("open-languages", "选择语言", Destination.CAPTURE_LANGUAGES),
+                ),
+            )
+        )
 
     def set_language_pair(self, source_language: str, target_language: str) -> bool:
-        from .core import SOURCE_LANGUAGES
-
-        if self.occupancy().busy:
-            return False
-        if source_language not in SOURCE_LANGUAGES or target_language not in TARGET_LANGUAGES:
-            return False
-        source_changed = source_language != self.config.source_language
-        if source_language == self.config.source_language and target_language == self.config.target_language:
-            return True
-        self.configuration.update(
-            source_language=source_language,
-            target_language=target_language,
-        )
-        if source_changed:
-            self.detected_source_language = None
-            warmup_token = getattr(self, "ocr_warmup_token", None)
-            if warmup_token:
-                warmup_token.cancel()
-                self.ocr_warmup_token = None
-            if hasattr(self, "schedule_ocr_warmup"):
-                self.schedule_ocr_warmup()
-        self.refresh_language_actions()
-        return True
+        return self.languages.set_pair(source_language, target_language)
 
     def on_configuration_changed(self, config: Config) -> None:
         """Push stored values into the views without discarding unsaved edits."""
@@ -545,22 +419,15 @@ class Controller(QObject):
         self._start_pipeline()
 
     def _on_swap_languages(self, _payload) -> None:
-        pair = swap_language_pair(
-            self.config.source_language,
-            self.config.target_language,
-            self.detected_source_language,
-        )
-        if not pair:
+        if not self.languages.swap():
             self.message = "自动识别需先完成一次识别，且输入输出语言不能相同"
             return
-        self.set_language_pair(*pair)
         self._on_retranslate(None)
 
     def set_detected_language(self, generation: int, language: str) -> None:
-        if not self.session.is_current(generation) or language not in TARGET_LANGUAGES:
-            return
-        self.detected_source_language = language
-        self.refresh_language_actions()
+        """Apply a detection only to the capture that produced it."""
+        if self.session.is_current(generation):
+            self.languages.detect(language)
 
     def toggle(self) -> None:
         if self.overlays:
@@ -915,22 +782,18 @@ class Controller(QObject):
     def on_download_completed(self, succeeded: bool) -> None:
         if succeeded:
             # New weights on disk change what the backend can do.
-            self.refresh_readiness()
-            self.schedule_ocr_warmup()
+            self.backends.poll()
 
     def quit(self) -> None:
         self.cancel()
         self.manual.cancel()
-        self.readiness_timer.stop()
+        self.backends.suspend()
         self.downloads.shutdown()
-        for token in (self.ocr_warmup_token, self.readiness_token):
-            if token:
-                token.cancel()
         self.hotkey.close()
         # Stop accepting remote work before tearing the engines down, so an
         # in-flight request fails cleanly instead of racing the shutdown.
         self.host_service.stop()
-        self.backend.stop()
+        self.backends.stop()
         self.tasks.shutdown()
         self.tray.hide()
         self.app.quit()
