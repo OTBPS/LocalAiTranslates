@@ -240,7 +240,6 @@ def stylesheet(theme: Theme, metrics: Metrics, fonts: Typography) -> str:
             max-width: {metrics.height_icon}px;
             min-height: {metrics.height_icon}px;
             padding: 0;
-            background: {theme.bg_hover};
         }}
         QPushButton#dangerButton {{
             color: {danger.text};

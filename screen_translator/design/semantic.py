@@ -163,10 +163,12 @@ CONSTRUCTIVIST = Theme(
     tooltip_text=PAPER["surface"],
 )
 
-#: What the application actually uses. The direction flip is a change to
-#: this line plus `metrics.ACTIVE` -- which is why it can be reverted with
-#: one `git revert`.
-ACTIVE = CONSTRUCTIVIST
+#: What the application actually uses.
+#:
+#: `CONSTRUCTIVIST` stays defined: reverting the commit that changed this
+#: line is the whole rollback, and ADR 0002 says so. It is also what the
+#: archived before/after renders were produced with.
+ACTIVE = LIGHT
 
 THEMES = {theme.name: theme for theme in (LIGHT, DARK, CONSTRUCTIVIST)}
 

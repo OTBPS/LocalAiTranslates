@@ -113,6 +113,6 @@ ROUNDED = Metrics(
 )
 
 #: Flipped together with `semantic.ACTIVE`; see ADR 0002.
-ACTIVE = FLAT
+ACTIVE = ROUNDED
 
 METRICS = {item.name: item for item in (FLAT, ROUNDED)}

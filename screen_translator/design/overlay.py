@@ -28,6 +28,8 @@ class OverlayPalette:
     capsule_fill: tuple[int, int, int, int]
     capsule_border: str
     capsule_text: str
+    #: The other ink, for a state badge too dark to carry the first one.
+    capsule_text_inverse: str
     capsule_hint: str
     badge_fill: str
     badge_text: str
@@ -50,11 +52,12 @@ PINNED = OverlayPalette(
     capsule_fill=(243, 233, 210, 246),
     capsule_border=PAPER["ink"],
     capsule_text=PAPER["ink"],
+    capsule_text_inverse=PAPER["white"],
     capsule_hint=PAPER["muted"],
     badge_fill=PAPER["yellow"],
     badge_text=PAPER["ink"],
     cursor_core=PAPER["yellow"],
-    cursor_halo="#F8EBCF",
+    cursor_halo=PAPER["yellow_pale"],
     state_selecting=PAPER["red"],
     state_adjusting=PAPER["red"],
     state_processing=PAPER["yellow"],

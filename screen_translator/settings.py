@@ -49,8 +49,15 @@ from .remote_settings import (
     service_fields_changed,
 )
 from .text_translation_page import TextTranslationPage
-from .theme import UI_COLORS, asset_path
-from .widgets import AppHeader, Card, Divider, ToggleRow, set_enabled_with_reason
+from .theme import asset_path
+from .widgets import (
+    AppHeader,
+    Card,
+    Divider,
+    StatusChip,
+    ToggleRow,
+    set_enabled_with_reason,
+)
 
 
 class Settings(QWidget):
@@ -141,11 +148,10 @@ class Settings(QWidget):
         self.status_card = status_card
         status_row = QHBoxLayout()
         status_row.setSpacing(8)
-        self.model_status = QLabel()
-        self.ocr_status = QLabel()
-        self.qwen_status = QLabel()
+        self.model_status = StatusChip()
+        self.ocr_status = StatusChip()
+        self.qwen_status = StatusChip()
         for chip in (self.model_status, self.ocr_status, self.qwen_status):
-            chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
             status_row.addWidget(chip, 1)
         status_card_layout.addLayout(status_row)
         capture_layout.addWidget(status_card)
@@ -387,18 +393,14 @@ class Settings(QWidget):
         """See `widgets.set_enabled_with_reason`; the text page shares it."""
         set_enabled_with_reason(widget, enabled, reason)
 
-    def set_status_chip(self, label, text, tone="neutral"):
-        palette = {
-            "success": ("#E8BC35", "#151515", UI_COLORS["text"]),
-            "warning": ("#C51D23", "#151515", "#FFFFFF"),
-            "neutral": ("#F3E9D2", "#151515", UI_COLORS["text_muted"]),
-        }
-        background, border, foreground = palette[tone]
-        label.setText(text)
-        label.setStyleSheet(
-            f"background:{background};color:{foreground};border:1px solid {border};"
-            "border-radius:0;padding:8px 9px;font-size:12px;font-weight:700;"
-        )
+    def set_status_chip(self, chip, text, tone="neutral"):
+        """Set a chip's text and role.
+
+        This used to build an inline stylesheet from three literal
+        colours per tone, which is a second styling system living inside
+        the first one. The chip is a token-styled widget now.
+        """
+        chip.show_state(text, tone)
 
     def set_combo(self, combo, value):
         index = combo.findData(value)

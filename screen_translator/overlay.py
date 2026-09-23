@@ -11,6 +11,8 @@ from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QMenu, QWidget
 
 from .capture import CaptureCommand, Handle, state_label
+from .design import overlay as overlay_palette
+from .design.primitives import contrast_ratio
 from .session import SessionState
 
 ANIMATION_INTERVAL_MS = 100
@@ -21,6 +23,7 @@ CAPSULE_HEIGHT = 78
 BADGE_HEIGHT = 28
 BADGE_GAP = 10
 EDGE_MARGIN = 12
+SELECTION_WIDTH = 4
 
 _ARROW_KEYS = {
     Qt.Key.Key_Left: (-1, 0),
@@ -42,13 +45,29 @@ RESULT_MENU_COMMANDS = (
     CaptureCommand.TOGGLE_VIEW,
 )
 
+# The overlay's palette is pinned rather than themed: it paints on an
+# unknown screenshot, so whether the application is light or dark says
+# nothing about whether the region the user grabbed is. See MASTER.md.
+PALETTE = overlay_palette.PINNED
+
 _STATE_COLOURS = {
-    SessionState.SELECTING: "#C51D23",
-    SessionState.ADJUSTING: "#C51D23",
-    SessionState.PROCESSING: "#E8BC35",
-    SessionState.RESULT: "#C51D23",
-    SessionState.FAILED: "#C51D23",
+    SessionState.SELECTING: PALETTE.state_selecting,
+    SessionState.ADJUSTING: PALETTE.state_adjusting,
+    SessionState.PROCESSING: PALETTE.state_processing,
+    SessionState.RESULT: PALETTE.state_result,
+    SessionState.FAILED: PALETTE.state_failed,
 }
+
+
+def _label_colour(fill: QColor) -> str:
+    """Whichever chrome ink is readable on this state badge.
+
+    Measured rather than keyed off the state name, so adding a state
+    colour cannot quietly produce an unreadable label -- which is what
+    the previous `white if red else black` would have done.
+    """
+    inks = (PALETTE.capsule_text, PALETTE.capsule_text_inverse)
+    return max(inks, key=lambda ink: contrast_ratio(ink, fill.name().upper()))
 
 
 def draw_selection_cursor(painter: QPainter, point: QPoint) -> None:
@@ -62,14 +81,14 @@ def draw_selection_cursor(painter: QPainter, point: QPoint) -> None:
     )
     painter.save()
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-    painter.setPen(QPen(QColor(21, 21, 21, 235), 5, Qt.PenStyle.SolidLine))
+    painter.setPen(QPen(QColor(*PALETTE.dim[:3], 235), 5, Qt.PenStyle.SolidLine))
     for segment in segments:
         painter.drawLine(*segment)
-    painter.setPen(QPen(QColor("#F8EBCF"), 2, Qt.PenStyle.SolidLine))
+    painter.setPen(QPen(QColor(PALETTE.cursor_halo), 2, Qt.PenStyle.SolidLine))
     for segment in segments:
         painter.drawLine(*segment)
-    painter.setPen(QPen(QColor(21, 21, 21, 235), 2))
-    painter.setBrush(QColor("#E8BC35"))
+    painter.setPen(QPen(QColor(*PALETTE.dim[:3], 235), 2))
+    painter.setBrush(QColor(PALETTE.cursor_core))
     painter.drawEllipse(point, 3, 3)
     painter.restore()
 
@@ -131,7 +150,7 @@ class Overlay(QWidget):
 
     def _paint_selection(self, painter, model, *, dim=True):
         if dim:
-            painter.fillRect(self.rect(), QColor(21, 21, 21, 138))
+            painter.fillRect(self.rect(), QColor(*PALETTE.dim))
         if model.selection is None:
             return
         region = self.local(model.selection)
@@ -140,11 +159,11 @@ class Overlay(QWidget):
             painter.setClipRect(region)
             painter.drawImage(self.rect(), self.screen.image)
             painter.restore()
-        painter.setPen(QPen(QColor("#C51D23"), 4))
+        painter.setPen(QPen(QColor(PALETTE.selection), SELECTION_WIDTH))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(region)
-        painter.setPen(QPen(QColor("#151515"), 2))
-        painter.setBrush(QColor("#E8BC35"))
+        painter.setPen(QPen(QColor(PALETTE.handle_border), 2))
+        painter.setBrush(QColor(PALETTE.handle_fill))
         for _handle, box in model.handles:
             painter.drawRect(self.local(box))
 
@@ -153,10 +172,10 @@ class Overlay(QWidget):
             return
         width = painter.fontMetrics().horizontalAdvance(badge_text) + 24
         badge = self._badge_rect(region, width, model)
-        painter.setPen(QPen(QColor("#151515"), 2))
-        painter.setBrush(QColor("#E8BC35"))
+        painter.setPen(QPen(QColor(PALETTE.badge_text), 2))
+        painter.setBrush(QColor(PALETTE.badge_fill))
         painter.drawRect(badge)
-        painter.setPen(QColor("#151515"))
+        painter.setPen(QColor(PALETTE.badge_text))
         painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, badge_text)
 
     def _capsule_rect(self):
@@ -192,16 +211,16 @@ class Overlay(QWidget):
         # hint used to share one line and was overwritten by progress text
         # exactly when the wait was longest.
         bar = self._capsule_rect()
-        painter.setPen(QPen(QColor("#151515"), 3))
-        painter.setBrush(QColor(243, 233, 210, 246))
+        painter.setPen(QPen(QColor(PALETTE.capsule_border), 3))
+        painter.setBrush(QColor(*PALETTE.capsule_fill))
         painter.drawRect(bar)
 
         state_rect = QRect(bar.left() + 10, bar.top() + 10, 92, 38)
-        colour = QColor(_STATE_COLOURS.get(model.state, "#151515"))
-        painter.setPen(QPen(QColor("#151515"), 2))
+        colour = QColor(_STATE_COLOURS.get(model.state, PALETTE.capsule_text))
+        painter.setPen(QPen(QColor(PALETTE.capsule_border), 2))
         painter.setBrush(colour)
         painter.drawRect(state_rect)
-        painter.setPen(QColor("#FFFFFF") if colour == QColor("#C51D23") else QColor("#151515"))
+        painter.setPen(QColor(_label_colour(colour)))
         heading = QFont("Microsoft YaHei UI", 10)
         heading.setWeight(QFont.Weight.Black)
         painter.setFont(heading)
@@ -209,7 +228,7 @@ class Overlay(QWidget):
 
         body = QFont("Microsoft YaHei UI", 10)
         painter.setFont(body)
-        painter.setPen(QColor("#151515"))
+        painter.setPen(QColor(PALETTE.capsule_text))
         text_left = state_rect.right() + 14
         width = bar.right() - text_left - 12
         if detail:
@@ -220,7 +239,7 @@ class Overlay(QWidget):
                 painter.fontMetrics().elidedText(detail, Qt.TextElideMode.ElideRight, max(20, width)),
             )
         hint_rect = QRect(text_left, bar.top() + (34 if detail else 20), width, 24)
-        painter.setPen(QColor("#514B40"))
+        painter.setPen(QColor(PALETTE.capsule_hint))
         painter.drawText(
             hint_rect,
             Qt.AlignmentFlag.AlignVCenter,

@@ -94,6 +94,7 @@ PAPER = {
     "red_pressed": "#821116",
     "danger": "#B4161B",
     "yellow": "#E8BC35",
+    "yellow_pale": "#F8EBCF",
     "yellow_pressed": "#D2A525",
     "success": "#343A24",
     "warning": "#7A2C16",

@@ -185,17 +185,18 @@ def test_the_application_icon_still_covers_every_windows_size():
     }
 
 
-def test_the_theme_contract_matches_the_direction_currently_shipping():
-    """Inverted, not deleted, when the visual flip lands. See ADR 0002.
+def test_the_theme_contract_follows_the_apple_direction():
+    """The old guard, pointed the other way. See ADR 0002.
 
-    At that point this asserts that system blue is present and the
-    constructivist red is absent from chrome — the same guard, pointed
-    the other way.
+    It used to assert that Apple blue was absent and constructivist red
+    present. Inverting rather than deleting it keeps the same protection
+    against drifting back, in whichever direction drift would be.
     """
     stylesheet = application_stylesheet()
     theme = semantic.ACTIVE
 
     assert theme.accent_fill in stylesheet
-    assert theme.bg_hover in stylesheet
-    for stray in ("#007AFF", "#0066DB"):
-        assert stray not in stylesheet, "the flip has landed; invert this test"
+    assert semantic.CONSTRUCTIVIST.accent_fill not in stylesheet
+    assert semantic.CONSTRUCTIVIST.bg_hover not in stylesheet
+    # Still permitted in the application icon, which is not chrome.
+    assert "border-radius: 0px" not in stylesheet

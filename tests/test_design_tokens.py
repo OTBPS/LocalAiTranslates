@@ -217,15 +217,21 @@ def test_the_primary_button_keeps_its_full_hit_area():
 # -- the transition ----------------------------------------------------
 
 
-def test_the_active_theme_is_still_the_one_that_ships_today():
-    """Until the flip lands, the token layer must change nothing.
-
-    Delete this test in the same commit that changes the direction; it
-    is here to make an accidental early flip loud.
+def test_the_three_active_choices_agree_with_each_other():
+    """Rounded geometry with the retired palette, or the reverse, is a
+    half-flipped interface -- the state ADR 0002 says must never be
+    committed. This is the check that says the flip was complete.
     """
-    assert semantic.ACTIVE is semantic.CONSTRUCTIVIST
-    assert metrics.ACTIVE is metrics.FLAT
-    assert typography.ACTIVE is typography.CONSTRUCTIVIST
+    assert semantic.ACTIVE is semantic.LIGHT
+    assert metrics.ACTIVE is metrics.ROUNDED
+    assert typography.ACTIVE is typography.APPLE
+
+
+def test_the_retired_direction_is_still_reachable_for_a_revert():
+    # Reverting one commit is the documented rollback. It only works if
+    # the values it restores still exist.
+    assert semantic.CONSTRUCTIVIST.accent_fill
+    assert metrics.FLAT.radius_card == 0
 
 
 def test_the_overlay_palette_is_pinned_rather_than_themed():
