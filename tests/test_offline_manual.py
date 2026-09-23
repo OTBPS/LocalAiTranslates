@@ -11,6 +11,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PySide6.QtWidgets import QApplication
 
 from screen_translator.core import Config, TranslatedBlock
+from screen_translator.feedback import Occupancy
 from screen_translator.inference import InferenceCoordinator
 from screen_translator.manual_translation import ManualTranslationController
 from screen_translator.text_segmenter import segment_text
@@ -83,7 +84,7 @@ def test_segmentation_and_the_page_never_touch_the_network(offline):
         SimpleNamespace(
             config=Config(translation_model="qwen3-8b-q5-k-m", source_language="en", target_language="zh-Hans"),
             busy=False,
-            download_token=None,
+            occupancy=lambda: Occupancy(),
             detected_source_language=None,
             translator=port,
             manual=manual,

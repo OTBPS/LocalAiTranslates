@@ -6,10 +6,11 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PySide6.QtCore import QTimer
 from PySide6.QtTest import QSignalSpy
-from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from screen_translator.controller import Controller
 from screen_translator.core import Config
+from screen_translator.feedback import Occupancy
 from screen_translator.settings import Settings
 
 
@@ -22,7 +23,8 @@ def fake_controller(tmp_path, **overrides):
     state = SimpleNamespace(
         config=Config(model_dir=str(tmp_path)),
         busy=False,
-        download_token=None,
+        occupancy=Occupancy,
+        downloads=SimpleNamespace(active=False, cancel=Mock()),
         detected_source_language=None,
         ocr=SimpleNamespace(mode="未加载"),
         translator=SimpleNamespace(mode="未加载"),
@@ -106,12 +108,28 @@ def test_language_focus_is_deferred_until_window_is_visible(monkeypatch):
 def test_settings_exit_requires_confirmation_and_emits_request(monkeypatch, tmp_path):
     settings = Settings(fake_controller(tmp_path))
     spy = QSignalSpy(settings.exit_requested)
+    asked = []
+    # Patched at the port, not at QMessageBox: quitting is one of only two
+    # places that still blocks on an answer, and it goes through `confirm`.
     monkeypatch.setattr(
-        "screen_translator.settings.QMessageBox.question",
-        lambda *_args, **_kwargs: QMessageBox.StandardButton.Yes,
+        settings, "confirm", lambda request: bool(asked.append(request)) or True
     )
+
     settings.exit_button.click()
+
     assert spy.count() == 1
+    assert asked and asked[0].danger is True
+    settings.close()
+
+
+def test_declining_the_exit_confirmation_keeps_the_application_running(tmp_path, monkeypatch):
+    settings = Settings(fake_controller(tmp_path))
+    spy = QSignalSpy(settings.exit_requested)
+    monkeypatch.setattr(settings, "confirm", lambda _request: False)
+
+    settings.exit_button.click()
+
+    assert spy.count() == 0
     settings.close()
 
 

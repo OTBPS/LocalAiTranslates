@@ -8,6 +8,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PySide6.QtWidgets import QApplication
 
 from screen_translator.core import Config
+from screen_translator.feedback import Occupancy
 from screen_translator.remote_settings import (
     RemoteSettingsCard,
     runtime_fields_changed,
@@ -175,7 +176,7 @@ def test_the_model_selection_is_marked_as_local_only_in_remote_mode(tmp_path, mo
     controller = SimpleNamespace(
         config=Config(model_dir=str(tmp_path)),
         busy=False,
-        download_token=None,
+        occupancy=lambda: Occupancy(),
         detected_source_language=None,
         ocr=SimpleNamespace(mode="未加载"),
         translator=SimpleNamespace(mode="未加载"),

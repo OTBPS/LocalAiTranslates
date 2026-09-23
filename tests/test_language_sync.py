@@ -19,6 +19,7 @@ from PySide6.QtWidgets import QApplication
 
 from screen_translator.config_store import ConfigStore
 from screen_translator.core import Config
+from screen_translator.feedback import Occupancy
 from screen_translator.settings import Settings
 
 
@@ -38,7 +39,10 @@ def settings(tmp_path, monkeypatch):
         configuration=store,
         config=store.current,
         busy=False,
-        download_token=None,
+        occupancy=lambda: Occupancy(),
+        downloads=SimpleNamespace(
+            active=False, cancel=Mock(), start=Mock(), redownload=Mock(return_value=None)
+        ),
         detected_source_language=None,
         ocr=SimpleNamespace(mode="CUDA"),
         translator=SimpleNamespace(mode="CUDA"),

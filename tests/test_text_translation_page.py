@@ -10,6 +10,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from screen_translator.core import Config, TranslatedBlock
+from screen_translator.feedback import Occupancy
 from screen_translator.inference import InferenceCoordinator
 from screen_translator.manual_translation import ManualTranslationController
 from screen_translator.text_translation_page import (
@@ -73,13 +74,14 @@ def build(port=None, runner=None, **overrides):
     controller = SimpleNamespace(
         config=Config(translation_model="qwen3-8b-q5-k-m", source_language="en", target_language="zh-Hans"),
         busy=False,
-        download_token=None,
         detected_source_language=None,
         translator=port,
         manual=manual,
         inference=arbiter,
         set_language_pair=Mock(return_value=True),
     )
+    # Mirrors the real predicate: one question, answered in one place.
+    controller.occupancy = lambda: Occupancy(bool(controller.busy), "截图翻译正在进行")
     controller.__dict__.update(overrides)
     return TextTranslationPage(controller), controller, port, arbiter
 

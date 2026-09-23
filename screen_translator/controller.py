@@ -22,6 +22,7 @@ from .core import (
     merge_lines,
     swap_language_pair,
 )
+from .downloads import DownloadCoordinator
 from .feedback import (
     Notice,
     NoticeAction,
@@ -53,11 +54,15 @@ READINESS_INTERVAL_MS = 15000
 
 
 class Events(QObject):
+    """Background results coming back to the UI thread.
+
+    Download signals used to live here too; they now belong to
+    `DownloadCoordinator`, which owns that work end to end.
+    """
+
     progress = Signal(int, str)
     done = Signal(int, object)
     failed = Signal(int, str)
-    download = Signal(str, object, object)
-    downloaded = Signal(str)
     language_detected = Signal(int, str)
 
 
@@ -99,7 +104,6 @@ class Controller(QObject):
             inference=self.inference,
             tasks=self.tasks,
         )
-        self.download_token = None
         self.ocr_warmup_token = None
         self.readiness_token = None
         self.warmup_completed = False
@@ -130,6 +134,12 @@ class Controller(QObject):
             register_banner(self.notices)
         self.notices.action_invoked.connect(self.on_notice_action)
 
+        self.downloads = DownloadCoordinator(
+            tasks=self.tasks, notices=self.notices, parent=self
+        )
+        self.downloads.changed.connect(self.on_download_changed)
+        self.downloads.completed.connect(self.on_download_completed)
+
         self.hotkey = hotkey_factory(app, self.toggle)
         try:
             self.hotkey.apply(self.config.hotkey)
@@ -155,8 +165,6 @@ class Controller(QObject):
         self.events.progress.connect(self.progress)
         self.events.done.connect(self.done)
         self.events.failed.connect(self.failed)
-        self.events.download.connect(self.download_progress)
-        self.events.downloaded.connect(self.download_done)
         self.events.language_detected.connect(self.set_detected_language)
         if hasattr(self.settings, "exit_requested"):
             self.settings.exit_requested.connect(self.quit)
@@ -356,7 +364,7 @@ class Controller(QObject):
             self.settings.refresh()
 
     def swap_languages(self) -> None:
-        if self.busy or self.download_token:
+        if self.occupancy().busy:
             return
         pair = swap_language_pair(
             self.config.source_language,
@@ -387,7 +395,7 @@ class Controller(QObject):
     def set_language_pair(self, source_language: str, target_language: str) -> bool:
         from .core import SOURCE_LANGUAGES
 
-        if self.busy or self.download_token:
+        if self.occupancy().busy:
             return False
         if source_language not in SOURCE_LANGUAGES or target_language not in TARGET_LANGUAGES:
             return False
@@ -449,8 +457,12 @@ class Controller(QObject):
         """
         if self.busy:
             return Occupancy(True, "截图翻译正在进行")
-        if self.download_token:
-            return Occupancy(True, "正在下载模型")
+        if self.downloads.active:
+            return Occupancy(
+                True,
+                "正在下载模型",
+                actions=(NoticeAction("cancel-download", "取消下载"),),
+            )
         return Occupancy()
 
     def show_result_language_menu(self, parent, position) -> None:
@@ -463,7 +475,7 @@ class Controller(QObject):
             self.config.target_language,
             self.detected_source_language,
         )
-        action.setEnabled(bool(pair) and not self.busy and not self.download_token)
+        action.setEnabled(bool(pair) and not self.occupancy().busy)
         action.triggered.connect(self.swap_languages)
         menu.popup(position)
         self.result_language_menu = menu
@@ -709,24 +721,24 @@ class Controller(QObject):
             self.session.finish_cancel()
         self.refresh_language_actions()
 
-    def download_progress(self, name: str, current, total) -> None:
-        self.settings.bar.show()
-        self.settings.cancel_button.show()
-        self.settings.set_status(f"{name} · {current / 1e9:.2f} / {total / 1e9:.2f} GB")
-        self.settings.bar.setValue(int(current / total * 1000) if total else 0)
-
-    def download_done(self, message: str) -> None:
-        self.download_token = None
-        self.settings.bar.hide()
-        self.settings.cancel_button.hide()
-        self.settings.set_status(message)
+    def on_download_changed(self, snapshot) -> None:
+        show_download = getattr(self.settings, "show_download", None)
+        if show_download is not None:
+            show_download(snapshot)
         self.refresh_language_actions()
+
+    def on_download_completed(self, succeeded: bool) -> None:
+        if succeeded:
+            # New weights on disk change what the backend can do.
+            self.refresh_readiness()
+            self.schedule_ocr_warmup()
 
     def quit(self) -> None:
         self.cancel()
         self.manual.cancel()
         self.readiness_timer.stop()
-        for token in (self.ocr_warmup_token, self.download_token, self.readiness_token):
+        self.downloads.shutdown()
+        for token in (self.ocr_warmup_token, self.readiness_token):
             if token:
                 token.cancel()
         self.hotkey.close()

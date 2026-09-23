@@ -59,9 +59,11 @@ def window(tmp_path, monkeypatch):
         configuration=store,
         config=store.current,
         busy=False,
-        download_token=None,
-        detected_source_language=None,
         occupancy=lambda: Occupancy(),
+        downloads=SimpleNamespace(
+            active=False, cancel=Mock(), start=Mock(), redownload=Mock(return_value=None)
+        ),
+        detected_source_language=None,
         ocr=SimpleNamespace(mode="CUDA"),
         translator=SimpleNamespace(mode="CUDA"),
         backend=SimpleNamespace(kind="local", ready=lambda: True, describe=lambda: "就绪"),

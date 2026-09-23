@@ -53,7 +53,9 @@ def controller(tmp_path, **overrides):
         configuration=store,
         config=store.current,
         busy=False,
-        download_token=None,
+        downloads=SimpleNamespace(
+            active=False, cancel=Mock(), start=Mock(), redownload=Mock(return_value=None)
+        ),
         detected_source_language=None,
         ocr=SimpleNamespace(mode="未加载"),
         translator=SimpleNamespace(mode="未加载", stop=Mock()),
@@ -71,6 +73,16 @@ def controller(tmp_path, **overrides):
     for name, value in overrides.items():
         setattr(state, name, value)
     return state
+
+
+def _run_stop_translator(state):
+    """Invoke the callback the window handed to the download coordinator.
+
+    Quarantining is the coordinator's job now; the window only supplies the
+    rule about which backends own a local server.
+    """
+    state.downloads.redownload.assert_called_once()
+    state.downloads.redownload.call_args.kwargs["stop_translator"]()
 
 
 @pytest.mark.parametrize("value", [None, 5, Config(), ["Ctrl", "Alt", "T"]])
@@ -126,21 +138,15 @@ def test_redownload_leaves_a_remote_backend_alone(monkeypatch, tmp_path):
             "screen_translator.settings.models_ready", lambda *_args: True
         )
         monkeypatch.setattr(
-            "screen_translator.settings.QMessageBox.question",
-            lambda *_args, **_kwargs: __import__(
-                "PySide6.QtWidgets", fromlist=["QMessageBox"]
-            ).QMessageBox.StandardButton.Yes,
+            "screen_translator.settings.set_startup", lambda _enabled: None
         )
-        monkeypatch.setattr(
-            "screen_translator.settings.isolate_model_for_redownload",
-            lambda *_args: None,
-        )
-        monkeypatch.setattr(settings, "download_models", Mock())
+        monkeypatch.setattr(settings, "confirm", lambda _request: True)
 
         settings.reset_models()
 
         # The remote port owns no local server; stopping it would claim
         # something that did not happen.
+        _run_stop_translator(state)
         state.translator.stop.assert_not_called()
     finally:
         settings.close()
@@ -154,19 +160,30 @@ def test_redownload_still_stops_a_local_translator(monkeypatch, tmp_path):
             "screen_translator.settings.models_ready", lambda *_args: True
         )
         monkeypatch.setattr(
-            "screen_translator.settings.QMessageBox.question",
-            lambda *_args, **_kwargs: __import__(
-                "PySide6.QtWidgets", fromlist=["QMessageBox"]
-            ).QMessageBox.StandardButton.Yes,
+            "screen_translator.settings.set_startup", lambda _enabled: None
         )
-        monkeypatch.setattr(
-            "screen_translator.settings.isolate_model_for_redownload",
-            lambda *_args: None,
-        )
-        monkeypatch.setattr(settings, "download_models", Mock())
+        monkeypatch.setattr(settings, "confirm", lambda _request: True)
 
         settings.reset_models()
 
+        _run_stop_translator(state)
         state.translator.stop.assert_called_once()
+    finally:
+        settings.close()
+
+
+def test_declining_the_redownload_confirmation_changes_nothing(monkeypatch, tmp_path):
+    state = controller(tmp_path)
+    settings = Settings(state)
+    try:
+        monkeypatch.setattr(
+            "screen_translator.settings.models_ready", lambda *_args: True
+        )
+        monkeypatch.setattr(settings, "confirm", lambda _request: False)
+
+        settings.reset_models()
+
+        state.downloads.redownload.assert_not_called()
+        state.translator.stop.assert_not_called()
     finally:
         settings.close()

@@ -9,6 +9,7 @@ from PySide6.QtGui import QColor, QFontDatabase, QImage, QPainter
 from PySide6.QtWidgets import QApplication
 
 from screen_translator.controller import Controller
+from screen_translator.feedback import Occupancy
 
 
 def test_stale_result_cannot_replace_new_session():
@@ -151,10 +152,12 @@ def test_language_pair_is_saved_immediately_and_clears_stale_detection():
         """`config` reads through the store, exactly as Controller does."""
 
         busy = False
-        download_token = None
         configuration = store
         detected_source_language = "ja"
         refresh_language_actions = Mock()
+
+        def occupancy(self):
+            return Occupancy()
 
         @property
         def config(self):
@@ -174,7 +177,11 @@ def test_language_pair_cannot_change_while_processing():
     from screen_translator.core import Config
 
     config = Config(source_language="auto", target_language="zh-Hans")
-    state = SimpleNamespace(busy=True, download_token=None, config=config)
+    state = SimpleNamespace(
+        busy=True,
+        config=config,
+        occupancy=lambda: Occupancy(True, "截图翻译正在进行"),
+    )
     with patch.object(Config, "save") as save:
         assert not Controller.set_language_pair(state, "zh-Hans", "en")
     assert (state.config.source_language, state.config.target_language) == ("auto", "zh-Hans")

@@ -150,7 +150,7 @@ class TextTranslationPage(QWidget):
         return f"{name} · {self.c.translator.mode}"
 
     def refresh(self):
-        capture_busy = bool(self.c.busy) or bool(self.c.download_token)
+        capture_busy = bool(self.c.occupancy().busy)
         has_input = bool(self.source_text.toPlainText().strip())
         self.source_language.setEnabled(not capture_busy and not self._running)
         self.target_language.setEnabled(not capture_busy and not self._running)
@@ -177,7 +177,7 @@ class TextTranslationPage(QWidget):
         self.refresh()
 
     def language_selection_changed(self):
-        if self.c.busy or self.c.download_token:
+        if self.c.occupancy().busy:
             self.load_config()
             return
         self.c.set_language_pair(

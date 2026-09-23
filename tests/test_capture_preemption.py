@@ -24,14 +24,13 @@ def test_toggle_cancels_a_running_manual_translation_before_capturing(monkeypatc
     state = SimpleNamespace(
         overlays=[],
         busy=False,
-        download_token=None,
+        occupancy=lambda: Occupancy(),
         config=Config(),
         backend=SimpleNamespace(ready=lambda: True, kind="local"),
         inference=arbiter,
         settings=Mock(),
         tray=Mock(),
         notices=Mock(),
-        occupancy=lambda: Occupancy(),
         begin=Mock(),
     )
 

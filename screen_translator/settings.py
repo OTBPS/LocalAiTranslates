@@ -29,19 +29,17 @@ from .core import (
     REMOTE_MODE,
     SOURCE_LANGUAGES,
     TARGET_LANGUAGES,
-    CancellationToken,
-    Cancelled,
     swap_language_pair,
 )
-from .feedback import Notice, Severity, error_notice, success_notice
-from .feedback.sinks import BannerSink, NoticeBanner
-from .models import (
-    TRANSLATION_MODELS,
-    get_translation_model,
-    install_models,
-    isolate_model_for_redownload,
-    models_ready,
+from .feedback import (
+    ConfirmationRequest,
+    Notice,
+    Severity,
+    error_notice,
+    success_notice,
 )
+from .feedback.sinks import BannerSink, NoticeBanner
+from .models import TRANSLATION_MODELS, get_translation_model, models_ready
 from .native import set_startup
 from .navigation import Destination
 from .remote_settings import (
@@ -248,7 +246,7 @@ class Settings(QWidget):
         self.download_button.clicked.connect(self.download_models)
         self.cancel_button = QPushButton("取消下载")
         self.cancel_button.clicked.connect(
-            lambda: self.c.download_token.cancel() if self.c.download_token else None
+            lambda: self.c.downloads.cancel()
         )
         self.cancel_button.hide()
         actions.addWidget(self.download_button)
@@ -360,14 +358,29 @@ class Settings(QWidget):
         page_layout.setSpacing(14)
         return page, page_layout
 
+    def confirm(self, request: ConfirmationRequest) -> bool:
+        """`ConfirmationPort` implementation.
+
+        Only genuine questions reach here; anything that merely reports goes
+        through `notify` so the user is not made to dismiss a box to read it.
+        """
+        icon = (
+            QMessageBox.Icon.Warning if request.danger else QMessageBox.Icon.Question
+        )
+        box = QMessageBox(icon, request.title, request.body, parent=self)
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        if request.confirm_label:
+            box.button(QMessageBox.StandardButton.Yes).setText(request.confirm_label)
+        return box.exec() == QMessageBox.StandardButton.Yes
+
     def confirm_exit(self):
-        if (
-            QMessageBox.question(
-                self,
-                "退出",
-                "退出屏译？正在进行的任务会被取消。",
+        if self.confirm(
+            ConfirmationRequest(
+                "退出", "退出屏译？正在进行的任务会被取消。", danger=True
             )
-            == QMessageBox.StandardButton.Yes
         ):
             self.exit_requested.emit()
 
@@ -378,6 +391,26 @@ class Settings(QWidget):
         divider = QFrame()
         divider.setObjectName("divider")
         return divider
+
+    def set_enabled_with_reason(self, widget, enabled, reason=""):
+        """Enable or disable a control, and say why when it is unavailable.
+
+        Keeping the two together in one call is what stops them drifting
+        apart, which is how the window ended up full of greyed-out controls
+        that explained nothing.
+        """
+        widget.setEnabled(enabled)
+        if not enabled:
+            # Remember the control's own tooltip once, the first time we
+            # replace it, so the explanation can be handed back later.
+            if not hasattr(widget, "_enabled_tooltip"):
+                widget._enabled_tooltip = widget.toolTip()
+            widget.setToolTip(reason)
+        elif hasattr(widget, "_enabled_tooltip"):
+            # Only restore what we took. Clearing unconditionally would wipe
+            # the tooltips of controls that were never disabled.
+            widget.setToolTip(widget._enabled_tooltip)
+            del widget._enabled_tooltip
 
     def set_status_chip(self, label, text, tone="neutral"):
         palette = {
@@ -457,7 +490,7 @@ class Settings(QWidget):
         return f"约 {model.approximate_size_gb:.1f} GB{fallback}"
 
     def language_selection_changed(self):
-        if self.c.busy or self.c.download_token:
+        if self.c.occupancy().busy:
             self.load_config()
             return
         self.c.set_language_pair(
@@ -512,19 +545,37 @@ class Settings(QWidget):
             self.target_language.currentData(),
             self.c.detected_source_language,
         )
-        editable = not self.c.busy and not self.c.download_token
-        self.source_language.setEnabled(editable)
-        self.target_language.setEnabled(editable)
-        self.swap_button.setEnabled(bool(pair) and editable)
-        self.hotkey.setEnabled(editable)
-        self.directory.setEnabled(editable)
-        self.translation_model.setEnabled(editable)
-        self.startup.setEnabled(editable)
-        self.cpu.setEnabled(editable)
-        self.save.setEnabled(editable)
-        self.download_button.setEnabled(editable)
-        self.cleanup_button.setEnabled(editable and local_ready)
-        self.capture_button.setEnabled(editable and backend_ready)
+        occupancy = self.c.occupancy()
+        editable = not occupancy.busy
+        # Every disabled control says why. A greyed-out button with no
+        # explanation was the most common complaint about this window.
+        for widget in (
+            self.source_language,
+            self.target_language,
+            self.hotkey,
+            self.directory,
+            self.translation_model,
+            self.startup,
+            self.cpu,
+            self.save,
+            self.download_button,
+        ):
+            self.set_enabled_with_reason(widget, editable, occupancy.reason)
+        self.set_enabled_with_reason(
+            self.swap_button,
+            bool(pair) and editable,
+            occupancy.reason if occupancy.busy else "需要先完成一次识别，且输入输出语言不能相同",
+        )
+        self.set_enabled_with_reason(
+            self.cleanup_button,
+            editable and local_ready,
+            occupancy.reason if occupancy.busy else "本地没有可重新下载的模型",
+        )
+        self.set_enabled_with_reason(
+            self.capture_button,
+            editable and backend_ready,
+            occupancy.reason if occupancy.busy else self.c.backend.describe(),
+        )
         self.capture_button.setText("开始截图" if backend_ready else "模型未就绪")
         self.model_scope_note.setVisible(self.remote_card.mode.currentData() == REMOTE_MODE)
         self.remote_card.set_editable(editable)
@@ -628,52 +679,53 @@ class Settings(QWidget):
         return True
 
     def download_models(self):
+        """Validate the form, then hand the work to the coordinator.
+
+        The view used to create the cancellation token, assign it to the
+        controller and start the background task itself.
+        """
         if not self.apply():
             return
-        self.c.download_token = CancellationToken()
-        token = self.c.download_token
-        self.download_button.setEnabled(False)
-        self.cancel_button.show()
-        self.bar.setValue(0)
-        self.bar.show()
-        self.set_status("正在连接…")
+        self.c.downloads.start(self.c.config.model_dir, self.c.config.translation_model)
+
+    def show_download(self, snapshot):
+        """Reflect download state. Progress itself is reported as a notice."""
+        self.bar.setVisible(snapshot.active)
+        self.cancel_button.setVisible(snapshot.cancellable)
+        if snapshot.fraction is None:
+            self.bar.setRange(0, 0) if snapshot.active else self.bar.setRange(0, 1000)
+        else:
+            self.bar.setRange(0, 1000)
+            self.bar.setValue(int(snapshot.fraction * 1000))
+        if snapshot.detail:
+            self.set_status(snapshot.detail)
         self.refresh()
 
-        def run():
-            try:
-                install_models(
-                    self.c.config.model_dir,
-                    token,
-                    self.c.events.download.emit,
-                    self.c.config.translation_model,
-                )
-                message = "模型下载和校验完成，可离线使用"
-            except Cancelled:
-                message = "下载已取消，下次可继续"
-            except Exception as error:
-                message = f"下载失败：{type(error).__name__}，请检查网络后重试"
-            self.c.events.downloaded.emit(message)
-
-        self.c.tasks.start(run, name="model-download")
-
     def reset_models(self):
-        if self.c.busy or self.c.download_token:
+        if self.c.occupancy().busy:
             return
         root = Path(self.c.config.model_dir).resolve()
-        if (
-            QMessageBox.question(
-                self, "重新下载", "重新下载当前模型？旧文件会保留在恢复目录。"
+        if not self.confirm(
+            ConfirmationRequest(
+                "重新下载",
+                "重新下载当前模型？旧文件会保留在恢复目录。",
+                danger=True,
             )
-            != QMessageBox.StandardButton.Yes
         ):
             return
-        # In remote mode `self.c.translator` is the remote port, whose stop()
-        # is a deliberate no-op, and no local server is holding the file open.
-        # Calling it would be harmless but says something untrue about what is
-        # happening, so the guard keeps the two modes honest.
-        if self.c.backend.kind == LOCAL_MODE:
-            self.c.translator.stop()
-        backup = isolate_model_for_redownload(root, self.c.config.translation_model)
+        if not self.apply():
+            return
+
+        def stop_translator():
+            # In remote mode `self.c.translator` is the remote port, whose
+            # stop() is a deliberate no-op, and no local server is holding
+            # the file open. Calling it would be harmless but says something
+            # untrue about what is happening.
+            if self.c.backend.kind == LOCAL_MODE:
+                self.c.translator.stop()
+
+        backup = self.c.downloads.redownload(
+            str(root), self.c.config.translation_model, stop_translator=stop_translator
+        )
         if backup:
             self.set_status(f"当前模型已隔离至 {backup.relative_to(root)}")
-        self.download_models()
