@@ -3,7 +3,7 @@ import sys
 import winreg
 from ctypes import wintypes
 
-from PySide6.QtCore import QAbstractNativeEventFilter
+from PySide6.QtCore import QAbstractNativeEventFilter, Qt
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -160,3 +160,72 @@ class Job:
         if self.handle:
             kernel32.CloseHandle(self.handle)
             self.handle = None
+
+
+def app_theme_is_light() -> bool:
+    """Whether Windows is asking applications to use a light appearance.
+
+    `AppsUseLightTheme` is the per-application setting, distinct from
+    `SystemUsesLightTheme` which governs the taskbar and Start menu. A
+    user can and often does set them differently, and following the
+    wrong one produces an application that disagrees with every other
+    one on the desktop.
+
+    Defaults to light when the value is missing, which is Windows 10
+    before the setting existed.
+    """
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        ) as key:
+            return bool(winreg.QueryValueEx(key, "AppsUseLightTheme")[0])
+    except (OSError, ValueError):
+        return True
+
+
+# DwmSetWindowAttribute. 38 is DWMWA_SYSTEMBACKDROP_TYPE, which exists
+# from Windows 11 22H2; 20 is DWMWA_USE_IMMERSIVE_DARK_MODE, which the
+# title bar needs so it does not stay light behind a dark window.
+_DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+_DWMWA_SYSTEMBACKDROP_TYPE = 38
+_DWMSBT_MAINWINDOW = 2
+
+
+def _set_window_attribute(handle: int, attribute: int, value: int) -> bool:
+    try:
+        dwmapi = ctypes.WinDLL("dwmapi")
+    except OSError:
+        return False
+    data = ctypes.c_int(value)
+    result = dwmapi.DwmSetWindowAttribute(
+        wintypes.HWND(handle), ctypes.c_uint(attribute), ctypes.byref(data), ctypes.sizeof(data)
+    )
+    # A non-zero HRESULT here means the attribute is unknown to this
+    # build of Windows, which is the expected answer on 10 and on early
+    # 11. Nothing is broken; the window is simply opaque.
+    return result == 0
+
+
+def apply_window_material(window, *, dark: bool) -> bool:
+    """Ask DWM for the Mica backdrop. Harmless where it is unavailable.
+
+    The closest thing Windows has to the translucent material the visual
+    direction is modelled on, and the only one reachable without a
+    background filter Qt does not have. It is window-level rather than
+    element-level, which is stated in ADR 0002 rather than implied.
+
+    The native title bar is kept; Mica does not require drawing our own,
+    and drawing our own would break the rule that says keep it.
+    """
+    handle = int(window.winId())
+    if not handle:
+        return False
+    # Order matters: the title bar has to be told about dark mode
+    # separately, or it stays light above a dark window.
+    _set_window_attribute(handle, _DWMWA_USE_IMMERSIVE_DARK_MODE, int(dark))
+    applied = _set_window_attribute(handle, _DWMWA_SYSTEMBACKDROP_TYPE, _DWMSBT_MAINWINDOW)
+    if applied:
+        # Mica shows through only where nothing opaque is painted.
+        window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+    return applied

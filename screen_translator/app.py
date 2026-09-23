@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication
 from . import design
 from .core import local_dir
 from .instance import InstanceCoordinator
+from .native import app_theme_is_light
 from .settings import Settings
 from .theme import create_app_icon
 from .version import __version__
@@ -38,10 +39,11 @@ def main():
     font_path = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "msyh.ttc"
     if font_path.exists():
         QFontDatabase.addApplicationFont(str(font_path))
-    # Style, palette, font and stylesheet in one call. They used to be
-    # four independent lines, which is how the font ended up declared
-    # both here and in the stylesheet, free to disagree.
-    design.apply(app)
+    # Follow the system appearance, decided once at start-up. Switching
+    # at run time would mean re-polishing the whole widget tree and
+    # re-running every self-painted control for the sake of not
+    # restarting; see the "not doing" list in the plan.
+    design.apply(app, theme=design.theme_for(dark=not app_theme_is_light()))
     app.setWindowIcon(create_app_icon())
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("ScreenTranslator")

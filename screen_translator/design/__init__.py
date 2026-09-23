@@ -43,9 +43,15 @@ __all__ = [
 def apply(app, theme=None, sizes=None, fonts=None) -> None:
     """The single mounting point: style, palette and application font.
 
-    Replaces the five lines in `app.main` that set a font, a stylesheet
-    and a window icon independently of each other, which is how the font
-    ended up declared in two places that could disagree.
+    Replaces the four lines in `app.main` that set a style, a font and a
+    stylesheet independently of each other, which is how the font ended
+    up declared in two places free to disagree.
+
+    **The palette is not optional.** A stylesheet does not reach
+    QMessageBox, QToolTip, spin-box arrows, the native file dialog or
+    disabled text; with a dark stylesheet and no palette those stay
+    light, which shows up as white on white in the places a user cannot
+    avoid. The application set no palette at all before this.
     """
     from PySide6.QtGui import QFont
 

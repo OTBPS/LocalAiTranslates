@@ -20,6 +20,7 @@ from __future__ import annotations
 from .buttons import button, danger_button, icon_button, primary_button
 from .enablement import set_enabled_with_reason
 from .fields import Field, FieldGrid
+from .icons import themed_icon
 from .rows import LanguageRow
 from .status import InlineMessage, StatusChip, chip_palette
 from .surfaces import AppHeader, Card, Divider, InsetGroup
@@ -43,4 +44,5 @@ __all__ = [
     "icon_button",
     "primary_button",
     "set_enabled_with_reason",
+    "themed_icon",
 ]

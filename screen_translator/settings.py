@@ -4,7 +4,6 @@ import platform
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -32,6 +31,7 @@ from .core import (
     TARGET_LANGUAGES,
     swap_language_pair,
 )
+from .design import semantic
 from .feedback import (
     ConfirmationRequest,
     Notice,
@@ -41,7 +41,7 @@ from .feedback import (
 )
 from .feedback.sinks import BannerSink, NoticeBanner
 from .models import TRANSLATION_MODELS, get_translation_model, models_ready
-from .native import set_startup
+from .native import apply_window_material, set_startup
 from .navigation import Destination
 from .remote_settings import (
     RemoteSettingsCard,
@@ -49,7 +49,6 @@ from .remote_settings import (
     service_fields_changed,
 )
 from .text_translation_page import TextTranslationPage
-from .theme import asset_path
 from .widgets import (
     AppHeader,
     Card,
@@ -57,6 +56,7 @@ from .widgets import (
     StatusChip,
     ToggleRow,
     set_enabled_with_reason,
+    themed_icon,
 )
 
 
@@ -66,6 +66,7 @@ class Settings(QWidget):
     def __init__(self, controller):
         super().__init__()
         self.c = controller
+        self._material_applied = False
         self.setWindowTitle("屏译")
         self.setMinimumSize(680, 600)
         self.resize(820, 840)
@@ -124,7 +125,7 @@ class Settings(QWidget):
             self.source_language.addItem(LANGUAGE_NAMES[code], code)
         self.swap_button = QPushButton()
         self.swap_button.setObjectName("iconButton")
-        self.swap_button.setIcon(QIcon(asset_path("swap.svg")))
+        self.swap_button.setIcon(themed_icon("swap.svg"))
         self.swap_button.setIconSize(QSize(22, 22))
         self.swap_button.setAccessibleName("对调输入和输出语言")
         self.swap_button.setToolTip("对调输入和输出语言")
@@ -217,7 +218,7 @@ class Settings(QWidget):
         self.directory = QLineEdit(controller.config.model_dir)
         self.directory.setAccessibleName("模型保存目录")
         browse = QPushButton("浏览")
-        browse.setIcon(QIcon(asset_path("folder.svg")))
+        browse.setIcon(themed_icon("folder.svg"))
         browse.setIconSize(QSize(20, 20))
         browse.clicked.connect(self.browse)
         directory_row.addWidget(self.directory, 1)
@@ -236,7 +237,7 @@ class Settings(QWidget):
         model_layout.addWidget(self.bar)
         actions = QHBoxLayout()
         self.download_button = QPushButton("下载模型")
-        self.download_button.setIcon(QIcon(asset_path("download.svg")))
+        self.download_button.setIcon(themed_icon("download.svg"))
         self.download_button.setIconSize(QSize(19, 19))
         self.download_button.clicked.connect(self.download_models)
         self.cancel_button = QPushButton("取消下载")
@@ -249,7 +250,7 @@ class Settings(QWidget):
         actions.addStretch()
         self.cleanup_button = QPushButton("重新下载")
         self.cleanup_button.setObjectName("dangerButton")
-        self.cleanup_button.setIcon(QIcon(asset_path("trash.svg")))
+        self.cleanup_button.setIcon(themed_icon("trash.svg", "critical"))
         self.cleanup_button.setIconSize(QSize(18, 18))
         self.cleanup_button.clicked.connect(self.reset_models)
         actions.addWidget(self.cleanup_button)
@@ -277,7 +278,7 @@ class Settings(QWidget):
         self.save.clicked.connect(self.apply)
         self.capture_button = QPushButton()
         self.capture_button.setObjectName("primaryButton")
-        self.capture_button.setIcon(QIcon(asset_path("camera.svg")))
+        self.capture_button.setIcon(themed_icon("camera.svg", "on_accent"))
         self.capture_button.setIconSize(QSize(21, 21))
         self.capture_button.clicked.connect(self.c.toggle)
         footer.addWidget(self.exit_button)
@@ -298,6 +299,13 @@ class Settings(QWidget):
     def showEvent(self, event):  # noqa: N802 - Qt naming
         """Catch up on anything that happened while this window was hidden."""
         super().showEvent(event)
+        # Needs a window handle, so it cannot happen in the constructor.
+        # Silently a no-op on Windows 10 and early 11, where the
+        # attribute is unknown -- the window is simply opaque there.
+        if not self._material_applied:
+            self._material_applied = apply_window_material(
+                self, dark=semantic.ACTIVE.dark
+            )
         center = getattr(self, "_notices", None)
         if center is not None:
             center.replay()

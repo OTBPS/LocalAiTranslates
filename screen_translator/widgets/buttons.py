@@ -13,26 +13,38 @@ has to notice.
 from __future__ import annotations
 
 from PySide6.QtCore import QSize
-from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QPushButton, QWidget
 
 from ..design import metrics
-from ..design.resources import asset_path
+from .icons import themed_icon
 
 
-def button(label: str, parent: QWidget | None = None) -> QPushButton:
-    return QPushButton(label, parent)
-
-
-def primary_button(label: str, parent: QWidget | None = None) -> QPushButton:
+def button(
+    label: str, parent: QWidget | None = None, *, icon: str = "", role: str = "default"
+) -> QPushButton:
     control = QPushButton(label, parent)
-    control.setObjectName("primaryButton")
+    if icon:
+        control.setIcon(themed_icon(icon, role))
+        control.setIconSize(QSize(18, 18))
     return control
 
 
-def danger_button(label: str, parent: QWidget | None = None) -> QPushButton:
+def primary_button(label: str, parent: QWidget | None = None, *, icon: str = "") -> QPushButton:
+    control = QPushButton(label, parent)
+    control.setObjectName("primaryButton")
+    if icon:
+        # White, because the button is filled with the accent.
+        control.setIcon(themed_icon(icon, "on_accent"))
+        control.setIconSize(QSize(18, 18))
+    return control
+
+
+def danger_button(label: str, parent: QWidget | None = None, *, icon: str = "") -> QPushButton:
     control = QPushButton(label, parent)
     control.setObjectName("dangerButton")
+    if icon:
+        control.setIcon(themed_icon(icon, "critical"))
+        control.setIconSize(QSize(18, 18))
     return control
 
 
@@ -41,6 +53,7 @@ def icon_button(
     accessible_name: str,
     *,
     tooltip: str = "",
+    role: str = "default",
     parent: QWidget | None = None,
     sizes=None,
 ) -> QPushButton:
@@ -48,7 +61,7 @@ def icon_button(
     sizes = sizes or metrics.ACTIVE
     control = QPushButton(parent)
     control.setObjectName("iconButton")
-    control.setIcon(QIcon(asset_path(icon)))
+    control.setIcon(themed_icon(icon, role))
     control.setIconSize(QSize(sizes.height_icon // 2, sizes.height_icon // 2))
     control.setAccessibleName(accessible_name)
     # An icon-only control has to be reachable by pointer and by screen
