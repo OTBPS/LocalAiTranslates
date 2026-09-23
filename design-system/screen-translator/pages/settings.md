@@ -1,36 +1,59 @@
-# Settings — modern constructivist desktop treatment
+# Settings window
 
-This page overrides the global AI-native palette because the product owner
-explicitly requested a Soviet constructivist visual direction.
+Overrides `../MASTER.md` where the two differ.
 
-## Visual language
+## Structure
 
-- Use warm paper `#E9DFC8`, ink black `#151515`, revolutionary red `#C51D23`,
-  and restrained signal yellow `#E8BC35`.
-- Use flat color fields, asymmetric diagonals, circles, rectangles, two-pixel
-  black rules, and square corners. Do not use gradients, glass, or soft shadows.
-- Use Arial Black for short headings and Microsoft YaHei UI / Arial for body text;
-  keep Windows-native rendering and do not download fonts.
+Three tabs — 截图翻译 / 文本翻译 / 系统设置 — under a large-title header and
+above a shared footer. The notice banner sits **outside** the tabs, because
+the Save button is in the shared footer: a confirmation placed inside one
+page is invisible from the other two, which is exactly the bug that made a
+banner necessary.
+
+Each tab is a column of cards. Settings that are a list of labelled rows use
+`InsetGroup` rather than a `Card` with a hand-built `QVBoxLayout`; that is
+the Apple settings container and it is what makes hairline separation and
+corner inheritance consistent.
+
+## Copy
+
+*(Both rules carried over from the constructivist direction — see ADR 0001.
+They were its real gain and survive the change of visual language.)*
+
+- Prefer a concise label over explanatory copy. Helper text appears only for
+  errors, progress, or something needed to complete the current action;
+  optional technical detail goes in a tooltip.
+- Never repeat a value already visible in an adjacent control, chip or
+  button label.
 
 ## Interaction
 
-- Controls must be at least 44 px high and retain visible keyboard focus.
-- Use rectangular mechanical switches with a 120 ms transition; state correctness
-  must not depend on animation completion.
-- Use SVG outline icons with consistent 1.8 px strokes; no emoji icons.
-- Keep one prominent action: **开始截图**. Saving and model maintenance remain
-  visually secondary.
-- Keep labels visible, helper text near its control, and status expressed with
-  both text and color.
-- Prefer concise control labels over explanatory copy. Show helper text only for errors,
-  progress, or information needed to complete the current action; move optional technical
-  details to tooltips.
-- Do not repeat values already visible in adjacent controls, status pills, or button labels.
+- One prominent action per page. On 截图翻译 that is **开始截图**; saving and
+  model maintenance stay visually secondary.
+- Every disabled control carries its reason. `set_enabled_with_reason` sets
+  the state and the tooltip in one call so the two cannot separate.
+- A message that names a problem also carries a `Destination`, so its button
+  lands on the control that fixes it rather than describing where to find
+  it.
+- Labels are bound to their controls with `setBuddy`, so the label is part
+  of the hit area — which is what makes a 36 px input acceptable (ADR 0003).
+
+## Cross-device
+
+- The host is chosen from the Tailscale device list, which already knows the
+  name, the system, whether it is online and whether the link is direct.
+  "手动填写地址" stays as the first entry: a host Tailscale cannot see, or a
+  machine without Tailscale, must still be reachable.
+- Pairing is a six-digit code. The manual secret field remains, labelled as
+  being for older hosts, because a v0.7.0 host has no pairing route and
+  whoever updates one machine first must not be stranded.
+- Paired devices are listed by name and address. A secret is never rendered.
 
 ## Desktop adaptation
 
-- Preserve the native Windows title bar, system menu, tab order, file picker,
-  and tray behavior.
-- Use geometric decoration only in the hero and capture chrome; keep form controls
-  aligned and predictable.
-- Layout must remain usable down to 680×640 and reflow vertically via scrolling.
+- Keep the native Windows title bar, system menu, tab order, file picker and
+  tray behaviour. Mica does not require a custom title bar and does not get
+  one.
+- Usable down to 680 × 600, reflowing vertically by scrolling. The larger
+  Liquid-Glass padding makes this tighter than before, so it is a
+  pre-delivery check rather than an assumption.

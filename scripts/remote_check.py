@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import sys
 import time
 from pathlib import Path
@@ -35,13 +36,21 @@ from screen_translator.backend import LocalBackend  # noqa: E402
 from screen_translator.core import CancellationToken, Config, merge_lines  # noqa: E402
 from screen_translator.inference import InferenceCoordinator  # noqa: E402
 from screen_translator.remote.access import AccessPolicy, generate_secret  # noqa: E402
-from screen_translator.remote.client import RemoteBackend  # noqa: E402
+from screen_translator.remote.client import (  # noqa: E402
+    RemoteBackend,
+    RemoteError,
+    claim_pairing,
+)
 from screen_translator.remote.service import (  # noqa: E402
     RemoteService,
     ServiceState,
     TranslationService,
 )
-from screen_translator.remote.tailnet import TailnetUnavailable, peer_route  # noqa: E402
+from screen_translator.remote.tailnet import (  # noqa: E402
+    TailnetUnavailable,
+    peer_route,
+    read_status,
+)
 from screen_translator.tasks import TaskRunner  # noqa: E402
 
 # Synthetic fixture: plain ASCII drawn with a vector font, not a screenshot.
@@ -217,8 +226,14 @@ def command_host(args: argparse.Namespace) -> int:
 
     print(f"[host] listening on {status.url}", flush=True)
     print(f"[host] model  {config.translation_model}", flush=True)
-    print(f"[host] secret {secret}", flush=True)
-    print("[host] copy the URL and the secret into the other device's settings", flush=True)
+    if args.offer:
+        offer = service.broker.open_offer()
+        service.broker.host_label = platform.node()
+        print(f"[host] pairing code {offer.code} (valid {offer.ttl:.0f}s)", flush=True)
+        print("[host] on the other device: remote_check.py pair --url <this URL> --code <code>", flush=True)
+    else:
+        print(f"[host] secret {secret}", flush=True)
+        print("[host] copy the URL and the secret into the other device's settings", flush=True)
     exit_code = 0
     try:
         if args.self_check:
@@ -250,6 +265,47 @@ def command_host(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def command_pair(args: argparse.Namespace) -> int:
+    """Exchange a code for this device's own secret, the way the UI does."""
+    url = args.url
+    if not url and args.peer:
+        peer = read_status().find(args.peer) or next(
+            (item for item in read_status().peers if item.label == args.peer), None
+        )
+        if peer is None:
+            print(f"[pair] no tailnet device named {args.peer}", flush=True)
+            return 1
+        url = f"http://{peer.address}:{args.port}"
+    if not url:
+        print("[pair] give --url or --peer", flush=True)
+        return 1
+    try:
+        grant = claim_pairing(url, args.code, label=platform.node())
+    except RemoteError as error:
+        print(f"[pair] {error}", flush=True)
+        return 1
+    print(f"[pair] paired with {grant.host_label or url}", flush=True)
+    print(f"[pair] device_id {grant.device_id}", flush=True)
+    print(f"[pair] secret    {grant.secret}", flush=True)
+    print("[pair] put the URL and this secret into this device's settings", flush=True)
+    write_report(args.report, {"status": "ok", "url": url, "device_id": grant.device_id})
+    return 0
+
+
+def command_devices(args: argparse.Namespace) -> int:
+    """List what the device picker would show, without a window."""
+    try:
+        status = read_status()
+    except TailnetUnavailable as error:
+        print(f"[devices] {error}", flush=True)
+        return 1
+    if status.self_peer is not None:
+        print(f"[devices] self {status.self_peer.label} {status.self_peer.address}", flush=True)
+    for peer in status.peers:
+        print(f"[devices] {peer.address:<16} {peer.label:<24} {peer.describe()}", flush=True)
+    return 0
+
+
 def write_report(path: Path | None, report: dict) -> None:
     if path is None:
         return
@@ -273,12 +329,23 @@ def main() -> int:
     host.add_argument("--allow-cpu", action="store_true")
     host.add_argument("--self-check", action="store_true")
     host.add_argument("--duration", type=float, default=0.0)
+    host.add_argument("--offer", action="store_true", help="print a pairing code instead of the secret")
     host.set_defaults(handler=command_host)
 
     client = commands.add_parser("client", help="drive a remote host from this machine")
     client.add_argument("--url", required=True)
     client.add_argument("--secret", required=True)
     client.set_defaults(handler=command_client)
+
+    pair = commands.add_parser("pair", help="claim a per-device secret with a pairing code")
+    pair.add_argument("--url", help="http://<host address>:<port>")
+    pair.add_argument("--peer", help="tailnet device name or address, instead of --url")
+    pair.add_argument("--port", type=int, default=8765)
+    pair.add_argument("--code", required=True)
+    pair.set_defaults(handler=command_pair)
+
+    devices = commands.add_parser("devices", help="list tailnet devices")
+    devices.set_defaults(handler=command_devices)
 
     args = parser.parse_args()
     return args.handler(args)

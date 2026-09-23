@@ -1,5 +1,42 @@
 # v0.2 验证记录
 
+## 操作流程重构第一阶段（2026-09-23）
+
+### 自动化
+
+- Ruff 通过；完整测试 **861 passed / 6 skipped**，覆盖率 **86.07%**。第一阶段开始时的基线是 **377 passed / 4 skipped、74%**（v0.7.0 交付后同一工作区实测为 558 / 78.43%）。
+- `controller.py` 从 **464 语句、48% 覆盖** 降到 **203 语句、82% 覆盖**。剩下的是构造函数与三个顶层命令；再往下拆只会是发明间接层而不是移除它。
+- 四个用假 `self` 的测试文件全部改成真实对象构造：`test_warmup_scheduling`（`BackendService`）、`test_backend_switching`（同上）、`test_controller_ui`（`TrayIcon`）、`test_capture_preemption`（`CaptureController`，经 `tests/capture_harness.py`）。`test_sessions` 与 `test_capture_interaction` 一并改掉。仓库中已不存在对未绑定 `Controller` 方法的调用。
+- 新增纯函数单测，均不需要 `QApplication`：选区模型 20、命令允许集 35、`onboarding.evaluate` 13、协议协商 18、配对 36。
+- 端到端配对在 `127.0.0.1` 上跑**真实** HTTP 服务：取码、领取、用新签发的每设备密钥重新连上并通过 `/v1/health`，同时确认主机共享密钥仍然可用（降级安全）。
+
+### 实跑发现并修掉的缺陷
+
+1. **应用自第 3 步起根本无法启动。** 设置窗口在构造文本翻译页时调用 `occupancy()`，而 `occupancy()` 读的 `downloads` 在两条语句之后才创建。测试没抓到，是因为它们要么用读得极少的假窗口，要么用自带 `occupancy` 的假控制器。改为窗口最后构造，并加了用**真实** `Settings` 跑构造的 `test_the_real_settings_window_can_be_built_during_startup`。
+2. **选区尺寸角标滑到状态胶囊底下。** 角标只跟屏幕顶边比较，没考虑后画的胶囊，因此上三分之一的任何选区都看不到尺寸。渲染五种覆盖层状态时目视发现，已改成与胶囊矩形比较，并加了参数化测试。
+3. **`negotiate` 的默认参数在定义时绑定**，测试无法替身一个只认 v1 的旧构建。改为调用时读模块常量。
+
+### 覆盖层目视核对
+
+`scripts/render_overlay_preview.py` 离屏渲染五种状态（selecting / adjusting / adjusting-too-small / processing / failed），背景是左亮右暗的渐变，两端对比度同时可判。产物签入 `artifacts/ui/overlay-*.png`。两行胶囊（消息行 + 常驻提示行）、八个可拖控制点、失败态保留选区框均已目视确认。
+
+### 打包验收
+
+- PyInstaller 用未改动的 `ScreenTranslator.spec` 重新打包成功，`ScreenTranslator.exe` 41,720,333 字节（v0.7.0 为 41,617,726，+102 KB）。第一阶段新增的十余个模块全部是纯 Python，随 PYZ 进 exe，不需要改 spec，也不影响增量补丁的投递面。
+- 打好的 exe 跑 `--self-test D:\AI\Models`：真实 PaddleOCR（CUDA）+ 真实 llama.cpp 两轮全绿。首轮 16.03 s（含加载），次轮 0.94 s、OCR 63 ms、4 块。四种语言方向译文正确。这同时证明新的导入图在冻结环境下完整可解析——缺任何一个模块应用都起不来。
+- `tests/test_thin_client_imports.py`、`test_client_edition_packaging.py`、`test_installer_boundaries.py`、`test_installer_shortcuts.py` 共 30 项通过，瘦身版边界与增量包哨兵未受影响。
+
+### tailnet 设备发现（真机）
+
+`scripts/remote_check.py devices` 对真实 `tailscale status --json` 输出：本机 `BoPeng9950x3d 100.100.119.102`，对端 `PBT14P 100.92.144.26`（当时离线）。解析走的是新的 `parse_status`，`parse_peer_route` 现在是它的薄封装，只有一份解析逻辑。
+
+### 仍待真机验收
+
+- 双设备配对码全流程（主机 `remote_check.py host --offer`，客机 `remote_check.py pair --url <URL> --code <六位>`）——需要另一台设备开机。
+- v1 客机 ↔ v2 主机、v2 ↔ v1 的跨版本矩阵。
+- 关闭 Windows 通知权限后确认截图失败仍然可见。
+- 多屏与 125%/150% 混合缩放下的覆盖层交互。
+
 ## v0.7.0 跨设备翻译与客户端版（2026-09-21）
 
 ### 功能与质量

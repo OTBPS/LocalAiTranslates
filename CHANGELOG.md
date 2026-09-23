@@ -4,6 +4,51 @@ All notable user-visible changes are recorded here. Versions follow semantic ver
 
 ## Unreleased
 
+### Capture
+
+- Releasing the mouse now enters an adjustable state instead of translating immediately. The eight
+  corner and edge handles are draggable, arrow keys nudge by 1 px and Shift+arrow by 10, Return
+  confirms and R starts over. Set `capture_confirm_on_release` to restore the old gesture.
+- A selection below 12 × 12 says so and stays adjustable. It used to destroy the whole session and
+  send you back to the hotkey.
+- A failed capture keeps the overlay and your framing on screen, and Return retries the same
+  screenshot without grabbing it again. The failure used to tear both down and report through a
+  tray balloon Windows can suppress.
+- "Esc 取消" no longer disappears while the model runs, and the capsule counts the seconds spent —
+  a cold start can take most of a minute with nothing else to show for it.
+- Right-clicking a result offers copy translation, copy image, save image, retranslate, and swap
+  languages and retranslate. The only entry before swapped languages for the *next* capture.
+- A click the overlay cannot act on now says why instead of doing nothing.
+- The status capsule is drawn once, on the screen holding the cursor, and the 10 Hz repaint stops
+  once a result is on screen.
+
+### Setting up
+
+- A new installation is told what is missing and taken to the control that fixes it, rather than
+  getting a tray balloon and whichever settings tab was last open. The download size is named
+  before the button is pressed.
+- A login launch stays in the tray. The registry Run entry now passes `--autostart`, so the
+  application no longer infers the reason it was started from whether the models are ready.
+- Pair two devices with a six-digit code: pick the host from the Tailscale device list — which
+  shows its name, system, whether it is online and whether the connection is direct — and type the
+  code shown on it. No 43-character secret is read off a screen. Each device gets its own secret,
+  so revoking one does not disturb the others.
+- Pasting a secret manually still works, for a host that has not been updated yet.
+
+### Reliability and compatibility
+
+- The remote protocol negotiates a version instead of demanding equality, so a v0.7.0 host and a
+  newer client keep working while machines are updated one at a time.
+- Disabled controls explain themselves. Every disabled button now carries the reason in its
+  tooltip.
+- Saving settings confirms on every tab. The confirmation used to be written into a label that
+  only exists on one of the three.
+- Translating text with no model downloaded is refused with an explanation, instead of running far
+  enough to fail and showing an absolute file path as the error.
+- Fixed a Tailscale connection being reported as relayed when it was direct.
+- Configuration migrates to version 5. Migration is additive; a version 5 file is still refused by
+  older builds.
+
 ## 0.7.0
 
 - Add cross-device translation over Tailscale: one device captures and renders, another runs OCR

@@ -21,26 +21,91 @@ The UI may issue commands and render state, but must not perform OCR, translatio
 
 | Layer | Modules | May import |
 | --- | --- | --- |
-| Composition | `app`, `backend` | everything |
-| UI | `settings`, `remote_settings`, `overlay`, `text_translation_page`, `theme`, `ui_components` | flow, domain |
-| Flow | `controller`, `session`, `manual_translation`, `inference`, `tasks`, `remote.host` | contracts, domain |
-| Contracts | `contracts`, `capabilities` | domain |
-| Domain | `core`, `layout`, `text_segmenter`, `translation_quality`, `remote.protocol`, `remote.access` | stdlib only |
+| Composition | `app`, `backend`, `controller` | everything |
+| UI | `settings`, `remote_settings`, `overlay`, `text_translation_page`, `tray`, `theme`, `ui_components`, `feedback.sinks` | flow, domain |
+| Flow | `backend_service`, `languages`, `config_store`, `downloads`, `hotkeys`, `manual_translation`, `inference`, `tasks`, `capture.pipeline`, `capture.session_controller`, `remote.host`, `feedback.center` | contracts, domain |
+| Contracts | `contracts`, `capabilities`, `navigation`, `capture.view`, `feedback.confirm` | domain |
+| Domain | `core`, `session`, `download_session`, `layout`, `text_segmenter`, `translation_quality`, `onboarding`, `capture.selection`, `capture.commands`, `feedback.notices`, `remote.protocol`, `remote.access`, `remote.pairing` | stdlib only |
 | Infrastructure | `ocr_engine`, `translation_engine`, `models`, `model_registry`, `graphics`, `native`, `remote.client`, `remote.service`, `remote.tailnet` | contracts, domain |
 
 `contracts` mentions Qt only inside `TYPE_CHECKING`, and the domain layer imports nothing from the application. That is what lets the host service and a client build without the model runtimes import the same modules.
+
+`Controller` is an assembly root and three commands (`toggle`, `activate_settings`, `quit`). It
+owns nothing; everything it builds owns itself. This is deliberate and load-bearing: when the
+controller held the capture, the engines, the tray, the language pair and the download queue,
+every test for any of them had to build a namespace impersonating `self` and call unbound methods
+on it, which meant each test encoded its own idea of what the controller looked like. No test
+does that now.
+
+Anything that shows the language pair, readiness or progress is *told*, through a Qt signal, by
+the object that owns the fact. Nothing polls the controller for it.
 
 ## Session lifecycle
 
 The valid capture lifecycle is:
 
 ```text
-IDLE → SELECTING → PROCESSING → RESULT → IDLE
-                    ↓
-                CANCELLING → IDLE
+IDLE → SELECTING ⇄ ADJUSTING → PROCESSING → RESULT → IDLE
+                                    ↓   ↘
+                                    ↓    FAILED → PROCESSING (retry)
+                                CANCELLING → IDLE
 ```
 
+`ADJUSTING` is where a released selection waits to be confirmed, so releasing the mouse is no
+longer the point of no return. `FAILED` is why a failure keeps the overlay and the framing on
+screen: the old path destroyed both and then reported through a tray balloon that Windows is free
+to suppress, so a user with notifications off lost the result and any trace of the error.
+
 Every background result carries the generation that created it. A result may update application state only when its generation is current. Cancelling invalidates the generation before closing overlays, so late signals cannot affect a newer task.
+
+`CapturePipeline` runs recognise → translate → render and knows nothing about sessions,
+generations or signals. Deciding whether a result is still wanted belongs to the caller that owns
+the session. The pipeline needs no Qt application, no OpenCV and no controller, which is what makes
+it directly testable.
+
+## What the user can do, and why not
+
+`capture.commands.allowed_commands(state, selection, has_result)` is a pure function over the
+session state. A command outside the returned set is refused by `CaptureController.handle`, which
+returns `False` and stores the sentence from `describe_block`. This is why a click during
+processing can no longer look identical to a missed click: silence is not a reachable outcome.
+
+`capture.view.OverlayViewModel` separates `message` (what is happening) from `hint` (what can be
+done), and the overlay renders both rows always. They used to share one string, so progress text
+overwrote "Esc 取消" exactly when the wait was longest and the way out mattered most.
+
+## Feedback
+
+There are two message surfaces (the in-page banner and the overlay capsule), one fallback (the
+tray) and one confirmation primitive. `feedback.notices` is pure standard library: `route()` and
+`supersedes()` are functions over a `Notice`, so which surface a message reaches is a
+parameterised unit test rather than a property of where the call was written.
+
+**`NoticeCenter` may only be called from the UI thread.** Background workers keep using the
+existing pattern — a Qt signal carrying the generation — to get back to it. Without this rule the
+feedback layer becomes a new way to mutate widgets from a worker.
+
+A STICKY notice also enters `history()`, so a balloon the system swallowed can still be read when
+the window is opened. That replay is the structural answer to a tray that may be silenced.
+
+Flow-layer code never imports `QMessageBox`. The two remaining blocking questions (quit, and
+redownload) go through `feedback.confirm.ConfirmationPort`.
+
+## Onboarding
+
+`onboarding.evaluate(config, backend_ready, local_runtime, intent) -> OnboardingPlan` is a pure
+function, so first-run behaviour is a regression asset rather than something only observable by
+reinstalling. The stage is always derived; the only thing written to disk is
+`onboarding_completed`.
+
+`StartupIntent` is read from the command line, not guessed. The registry Run entry passes
+`--autostart`, so a login launch stays in the tray even on an installation that cannot translate
+yet. Inferring it from "are the models ready" is what opened a window at every login on a machine
+the user had not set up.
+
+Every blocking stage carries a `navigation.Destination`, and the settings window resolves it to a
+tab, an anchor and a widget to focus. A message that names the problem without the remedy leaves
+the reader to hunt through three tabs.
 
 ## Extension points
 
@@ -90,6 +155,50 @@ Boundaries that are not negotiable:
   rather than letting one screenshot take two hops through an inference slot nobody can reason about.
 - **No silent fallback.** An unreachable host is reported. Remote mode never quietly runs the
   models locally, because that would change which machine sees the user's screen.
+
+### Protocol versions
+
+`PROTOCOL_VERSION` is what a build sends; `SUPPORTED_PROTOCOL_VERSIONS` is what it will also
+accept. Both ends previously compared for exact equality, which would have made every version
+bump a flag day — a v2 host and a v1 client refusing each other, on machines updated one at a
+time. `negotiate()` returns the highest version both speak. A peer advertising something *newer*
+is answered at this build's best rather than refused, because the newer side is required to be
+able to fall back and refusing it strands the older half of a rolling upgrade. A peer with no
+version header at all is v1, which is when the header appeared.
+
+### Pairing
+
+A device claims a per-device secret by posting a six-digit code to `POST /v1/pair/claim`. That is
+the only route that runs without a secret, because it is how a secret is obtained; the peer
+address check still applies and the body is capped at 512 bytes.
+
+**Why six digits is enough.** The code is not the only thing in the way. An attacker must already
+be a member of this tailnet (WireGuard, plus the CGNAT range check in `remote.access`), must hit
+the 180-second window while it is open, and gets five attempts before the offer is exhausted —
+after which a 60-second lockout applies to that peer address. Blind guessing succeeds with
+probability at most 5/10⁶, once, and only from inside the tailnet. A longer code would cost
+readability and buy nothing against the threat that remains. This paragraph exists so the next
+person does not assume six was chosen by feel.
+
+Every rejected claim receives the same sentence. Distinguishing "wrong code" from "no offer" would
+confirm to anyone on the tailnet that this host is currently pairing; distinguishing "expired"
+would confirm the code was right. The real reason goes to the host log only.
+
+A client generates a nonce and retries with it after a lost reply; the host returns the identical
+grant rather than issuing a second secret that would leave the device holding the wrong one. The
+same nonce from a different address costs an attempt like any other bad claim.
+
+There is no `/v1/pair/status`. The host's own UI reads the broker in-process; an endpoint would
+only add something for a stranger to probe.
+
+`AccessPolicy.device_secrets` holds one secret per paired device and compares every candidate
+without short-circuiting. Revoking a device is removing one entry, rather than rotating the shared
+secret and re-pairing everything else. The shared secret keeps working, and the manual paste field
+stays in the window, because a v0.7.0 host has no pairing route at all.
+
+Per-device secrets are swapped into the running policy rather than counted in the listener's
+restart signature: restarting the instant a device pairs would drop the connection that just
+paired.
 
 ## Inference arbitration
 
@@ -142,6 +251,21 @@ unsaved edits survive repeated shortcut launches.
 Configuration migrations are sequential and normalize every persisted field. Invalid JSON is moved to a timestamped `config.corrupt-*` file and safe defaults are loaded. A configuration created by a newer application version is rejected rather than silently downgraded.
 
 Version 4 adds the cross-device fields. Migration is additive, so an existing single-device installation upgrades with its behaviour unchanged. `core` validates them structurally — URL shape, IP parsing, port range, secret length — while whether an address is on the tailnet is policy and stays in `remote.access`; that separation is what keeps the configuration layer independent of the networking layer. A remote mode without both an address and a secret is repaired to local, because the alternative is an installation that cannot capture at all.
+
+Version 5 adds every field the interaction refactor needs at once — `onboarding_completed`,
+`capture_confirm_on_release`, `remote_host_id`, `remote_host_label`, `remote_protocol`,
+`paired_devices`, `pairing_strict_peers` — even though they arrive over several releases. Bumping
+once per feature would mean a config written by an intermediate version is rejected by a
+reinstalled earlier one as "created by a newer version". One bump, lazy fields, and the shape of
+the file stays stable across the whole refactor.
+
+`Config.load` is `cls(**_normalize(data))` and performs no nested deserialisation, so
+`paired_devices` needs `normalize_paired_devices` explicitly; without it the field would hold
+plain dicts and every reader would have to guess which it got.
+
+`ConfigStore` is the only writer. `config` remains a read-only view, and the store announces
+changes, so nothing reloads a whole form to stay in step — which is how swapping the language pair
+used to discard every unsaved edit in the window.
 
 ## Build and release
 
