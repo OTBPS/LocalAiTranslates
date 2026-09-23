@@ -22,8 +22,7 @@ from PySide6.QtWidgets import (
 
 from .core import LANGUAGE_NAMES, SOURCE_LANGUAGES, TARGET_LANGUAGES, swap_language_pair
 from .models import get_translation_model
-from .theme import asset_path
-from .ui_components import make_card, make_language_row, set_enabled_with_reason
+from .widgets import Card, LanguageRow, set_enabled_with_reason
 
 READY_STATUS = "就绪"
 TRANSLATING_STATUS = "正在翻译…"
@@ -46,14 +45,16 @@ class TextTranslationPage(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
 
-        text_card, text_layout = make_card("文本翻译")
-        grid, self.source_language, self.swap_button, self.target_language = make_language_row(
-            SOURCE_LANGUAGES, TARGET_LANGUAGES, LANGUAGE_NAMES, asset_path("swap.svg")
-        )
+        text_card = Card("文本翻译")
+        text_layout = text_card.body
+        self.language_row = LanguageRow(SOURCE_LANGUAGES, TARGET_LANGUAGES, LANGUAGE_NAMES)
+        self.source_language = self.language_row.source
+        self.target_language = self.language_row.target
+        self.swap_button = self.language_row.swap
         self.swap_button.clicked.connect(self.swap_languages)
         self.source_language.currentIndexChanged.connect(self.language_selection_changed)
         self.target_language.currentIndexChanged.connect(self.language_selection_changed)
-        text_layout.addLayout(grid)
+        text_card.add(self.language_row)
 
         source_label = QLabel("原文")
         source_label.setObjectName("fieldLabel")

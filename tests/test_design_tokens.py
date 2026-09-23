@@ -179,7 +179,7 @@ def test_the_stylesheet_uses_no_font_weight_a_cjk_family_cannot_supply():
     weights = {int(value) for value in re.findall(r"font-weight:\s*(\d+)", sheet)}
 
     # YaHei has Light, Regular and Bold. 900 makes Qt stroke the outline
-    # outward, which at 96 dpi is mush -- and is what heroTitle does now.
+    # outward, which at 96 dpi is mush -- and is what the old heroTitle did.
     assert weights <= set(typography.ALLOWED_WEIGHTS), sorted(weights)
 
 

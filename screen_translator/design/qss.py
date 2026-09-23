@@ -87,18 +87,10 @@ def stylesheet(theme: Theme, metrics: Metrics, fonts: Typography) -> str:
             font-size: {fonts.size_body}px;
             font-weight: {fonts.weight_heading};
         }}
-        QLabel#heroTitle {{
-            color: {theme.text_on_accent};
+        QLabel#appTitle {{
+            color: {theme.text_primary};
             font-family: {fonts.family(fonts.size_title)};
             font-size: {fonts.size_title}px;
-            font-weight: {fonts.weight_heading};
-        }}
-        QLabel#heroMark {{
-            color: {theme.text_on_accent};
-            background: {theme.bg_hover};
-            border: {metrics.border}px solid {theme.stroke_control};
-            border-radius: {metrics.radius_small}px;
-            font-size: 25px;
             font-weight: {fonts.weight_heading};
         }}
         QLabel#sectionTitle {{
@@ -126,6 +118,26 @@ def stylesheet(theme: Theme, metrics: Metrics, fonts: Typography) -> str:
             font-weight: {fonts.weight_heading};
             color: {theme.text_primary};
         }}
+""",
+            f"""
+        QFrame#insetGroup {{
+            background: {card.fill};
+            border: {card.border_width}px solid {card.border};
+            border-radius: {card.radius}px;
+        }}
+        QLabel#statusChip {{
+            padding: 0 12px;
+            border: {metrics.border}px solid {theme.stroke_control};
+            border-radius: {metrics.radius_small}px;
+            background: {theme.bg_surface_raised};
+            color: {theme.text_secondary};
+            font-weight: {fonts.weight_label};
+        }}
+        /* Colour is never the only signal: the chip always carries text.
+           These only reinforce it. */
+        QLabel#statusChip[role="success"] {{ color: {theme.success}; }}
+        QLabel#statusChip[role="warning"] {{ color: {theme.caution}; }}
+        QLabel#statusChip[role="critical"] {{ color: {theme.critical}; }}
 """,
             f"""
         QLineEdit, QKeySequenceEdit, QComboBox {{

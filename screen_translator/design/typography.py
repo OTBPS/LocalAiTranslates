@@ -9,8 +9,8 @@ coverage, so the fallback happened anyway, just unpredictably.
 
 Weights stop at 700. Microsoft YaHei ships Light, Regular and Bold only,
 so asking for 900 makes Qt synthesise the weight by stroking the outline
-outward. At 96 dpi that renders as mush -- which is what the current
-`heroTitle` does.
+outward. At 96 dpi that renders as mush, which is what the retired
+900-weight `heroTitle` did.
 """
 
 from __future__ import annotations

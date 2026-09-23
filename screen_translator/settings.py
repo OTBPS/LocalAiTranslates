@@ -50,7 +50,7 @@ from .remote_settings import (
 )
 from .text_translation_page import TextTranslationPage
 from .theme import UI_COLORS, asset_path
-from .ui_components import ConstructivistHero, ToggleRow, make_card, set_enabled_with_reason
+from .widgets import AppHeader, Card, Divider, ToggleRow, set_enabled_with_reason
 
 
 class Settings(QWidget):
@@ -78,20 +78,8 @@ class Settings(QWidget):
         scroll.setWidget(content)
         outer.addWidget(scroll)
 
-        hero = ConstructivistHero()
-        hero_layout = QHBoxLayout(hero)
-        hero_layout.setContentsMargins(20, 16, 20, 16)
-        hero_layout.setSpacing(16)
-        mark = QLabel("译")
-        mark.setObjectName("heroMark")
-        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        mark.setFixedSize(48, 48)
-        hero_layout.addWidget(mark)
-        title = QLabel("屏译")
-        title.setObjectName("heroTitle")
-        hero_layout.addWidget(title)
-        hero_layout.addStretch()
-        layout.addWidget(hero)
+        self.header = AppHeader("屏译")
+        layout.addWidget(self.header)
 
         # Above the tabs on purpose: the save button lives in the shared
         # footer, so its confirmation has to be visible from every tab. The
@@ -389,15 +377,14 @@ class Settings(QWidget):
             self.exit_requested.emit()
 
     def make_card(self, title, subtitle=None):
-        return make_card(title, subtitle)
+        card = Card(title, subtitle or "")
+        return card, card.body
 
     def make_divider(self):
-        divider = QFrame()
-        divider.setObjectName("divider")
-        return divider
+        return Divider()
 
     def set_enabled_with_reason(self, widget, enabled, reason=""):
-        """See `ui_components.set_enabled_with_reason`; the text page shares it."""
+        """See `widgets.set_enabled_with_reason`; the text page shares it."""
         set_enabled_with_reason(widget, enabled, reason)
 
     def set_status_chip(self, label, text, tone="neutral"):
