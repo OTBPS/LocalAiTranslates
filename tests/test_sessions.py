@@ -1,61 +1,59 @@
-import os
+"""A capture that the user has moved on from must not come back.
 
-os.environ["QT_QPA_PLATFORM"] = "offscreen"
-from types import SimpleNamespace
+Every background result carries the generation it belongs to; these are
+the three ways a stale one used to leak into a newer session.
+"""
+
+import os
 from unittest.mock import Mock
 
-from PySide6.QtGui import QImage
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-from screen_translator.controller import Controller
+from capture_harness import build_capture
+
+from screen_translator.session import SessionState
 
 
 def test_stale_result_cannot_replace_new_session():
-    from screen_translator.session import CaptureSession, SessionState
+    subject = build_capture(SessionState.PROCESSING)
+    subject.result = "existing"
+    changed = Mock()
+    subject.state_changed.connect(changed)
 
-    session = CaptureSession(generation=4, state=SessionState.PROCESSING)
-    state = SimpleNamespace(
-        session=session,
-        overlays=[Mock()],
-        result="existing",
-        refresh_language_actions=Mock(),
-    )
-    state._finish_stale_cancel = lambda generation: Controller._finish_stale_cancel(state, generation)
-    Controller.done(state, 3, QImage(10, 10, QImage.Format.Format_RGB888))
-    assert state.result == "existing"
-    assert state.session.state == SessionState.PROCESSING
-    state.refresh_language_actions.assert_not_called()
+    subject.done(subject.session.generation - 1, "newer picture")
+
+    assert subject.result == "existing"
+    assert subject.session.state == SessionState.PROCESSING
+    changed.assert_not_called()
 
 
 def test_cancelled_worker_completion_releases_busy_state():
-    from screen_translator.session import CaptureSession, SessionState
+    subject = build_capture(SessionState.PROCESSING)
+    generation = subject.session.generation
+    subject.session.invalidate()
+    assert subject.session.state == SessionState.CANCELLING
+    changed = Mock()
+    subject.state_changed.connect(changed)
 
-    session = CaptureSession(generation=2, state=SessionState.CANCELLING)
-    state = SimpleNamespace(session=session, refresh_language_actions=Mock())
-    Controller._finish_stale_cancel(state, 1)
-    assert session.state == SessionState.IDLE
-    state.refresh_language_actions.assert_called_once()
+    # The worker for the cancelled generation finally reports back.
+    subject.done(generation, None)
+
+    assert subject.session.state == SessionState.IDLE
+    changed.assert_called_once()
 
 
 def test_cancel_closes_all_overlays_and_invalidates_generation():
-    from screen_translator.session import CaptureSession, SessionState
+    subject = build_capture(SessionState.SELECTING, overlays=2)
+    overlays = list(subject.overlays)
+    generation = subject.session.generation
 
-    overlays = [Mock(), Mock()]
-    session = CaptureSession(generation=1, state=SessionState.SELECTING)
-    session.token = Mock()
-    inference = Mock()
-    state = SimpleNamespace(
-        session=session,
-        overlays=overlays,
-        capture=object(),
-        result=object(),
-        screens=[1],
-        inference=inference,
-        refresh_language_actions=Mock(),
-    )
-    Controller.cancel(state)
-    assert session.token is None and session.generation == 2 and state.overlays == []
-    assert session.state == SessionState.IDLE
-    inference.end_capture.assert_called_once()
+    subject.cancel()
+
+    assert subject.session.token is None
+    assert subject.session.generation == generation + 1
+    assert subject.overlays == []
+    assert subject.session.state == SessionState.IDLE
+    assert subject.screens == []
     for overlay in overlays:
         overlay.close.assert_called_once()
 

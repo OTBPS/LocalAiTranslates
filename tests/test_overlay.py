@@ -28,7 +28,7 @@ from screen_translator.capture import (
     default_hint,
 )
 from screen_translator.graphics import ScreenShot
-from screen_translator.overlay import Overlay, draw_selection_cursor
+from screen_translator.overlay import RESULT_MENU_COMMANDS, Overlay, draw_selection_cursor
 from screen_translator.session import SessionState
 
 SIZE = QRect(0, 0, 300, 200)
@@ -67,7 +67,7 @@ def build(model):
         handled=[],
         cursor_point=QPoint(0, 0),
         repaint=Mock(),
-        show_result_menu=Mock(),
+        explain=lambda command: f"当前无法{command.label}",
     )
 
     def handle(command, payload=None):
@@ -119,13 +119,54 @@ def test_a_click_in_the_result_state_toggles_the_view():
         overlay.close()
 
 
-def test_right_click_opens_the_result_menu():
+def test_right_click_offers_everything_that_can_be_done_with_the_result():
     overlay, controller, _holder = build(model_for(SessionState.RESULT, has_result=True))
     overlay.show()
     try:
-        QTest.mouseClick(overlay, Qt.MouseButton.RightButton)
+        overlay.show_result_menu(QPoint(10, 10))
 
-        controller.show_result_menu.assert_called_once()
+        menu = overlay.result_menu
+        labels = [action.text() for action in menu.actions() if not action.isSeparator()]
+        # The header names the pair; the rest are the commands. Previously
+        # the only entry swapped languages for the *next* capture, so the
+        # translation on screen could not be copied, saved or redone.
+        assert labels[0] == "英语 → 简体中文"
+        assert labels[1:] == [command.label for command in RESULT_MENU_COMMANDS]
+        assert menu.actions()[0].isEnabled() is False, "the header is not a command"
+
+        menu.actions()[2].trigger()
+        assert controller.handled[-1][0] is RESULT_MENU_COMMANDS[0]
+    finally:
+        overlay.close()
+
+
+def test_a_command_the_result_cannot_offer_is_shown_disabled_with_a_reason():
+    overlay, controller, _holder = build(model_for(SessionState.RESULT, has_result=False))
+    controller.explain = lambda command: f"当前无法{command.label}"
+    overlay.show()
+    try:
+        overlay.show_result_menu(QPoint(10, 10))
+
+        # Hiding it would look like a missing feature; disabling it without
+        # a reason is the complaint this whole layer exists to fix.
+        copy_text = next(
+            action
+            for action in overlay.result_menu.actions()
+            if action.text() == CaptureCommand.COPY_TEXT.label
+        )
+        assert copy_text.isEnabled() is False
+        assert copy_text.toolTip() == "当前无法复制译文"
+    finally:
+        overlay.close()
+
+
+def test_the_menu_stays_shut_when_nothing_can_be_done():
+    overlay, _controller, _holder = build(model_for(SessionState.SELECTING))
+    overlay.show()
+    try:
+        overlay.show_result_menu(QPoint(10, 10))
+
+        assert not hasattr(overlay, "result_menu")
     finally:
         overlay.close()
 

@@ -108,9 +108,10 @@ def test_showing_hidden_settings_loads_latest_config():
 
 
 def test_explicit_activation_cancels_overlay_before_opening_settings():
-    state = SimpleNamespace(overlays=[object()], cancel=Mock(), show_settings=Mock())
+    captures = SimpleNamespace(active=True, cancel=Mock())
+    state = SimpleNamespace(captures=captures, show_settings=Mock())
     Controller.activate_settings(state)
-    state.cancel.assert_called_once()
+    captures.cancel.assert_called_once()
     state.show_settings.assert_called_once()
 
 

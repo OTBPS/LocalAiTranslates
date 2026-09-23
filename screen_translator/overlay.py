@@ -8,7 +8,7 @@ without a window and the visuals be replaced without touching the flow.
 
 from PySide6.QtCore import QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPen
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QMenu, QWidget
 
 from .capture import CaptureCommand, Handle, state_label
 from .session import SessionState
@@ -28,6 +28,19 @@ _ARROW_KEYS = {
     Qt.Key.Key_Up: (0, -1),
     Qt.Key.Key_Down: (0, 1),
 }
+
+# What the right-click menu offers, in the order it offers it. Commands
+# that are not allowed right now are shown disabled with the reason
+# attached, rather than hidden -- an absent entry looks like a missing
+# feature.
+RESULT_MENU_COMMANDS = (
+    CaptureCommand.COPY_TEXT,
+    CaptureCommand.COPY_IMAGE,
+    CaptureCommand.SAVE_IMAGE,
+    CaptureCommand.RETRANSLATE,
+    CaptureCommand.SWAP_LANGUAGES,
+    CaptureCommand.TOGGLE_VIEW,
+)
 
 _STATE_COLOURS = {
     SessionState.SELECTING: "#C51D23",
@@ -214,6 +227,31 @@ class Overlay(QWidget):
             painter.fontMetrics().elidedText(model.hint, Qt.TextElideMode.ElideRight, max(20, width)),
         )
 
+    def show_result_menu(self, position) -> None:
+        """Offer what can actually be done with the result in front of you.
+
+        Previously the only entry swapped the language pair *for the next
+        capture*, so the translation on screen could not be copied, saved
+        or redone without starting over.
+        """
+        model = self.model()
+        if not model.commands & set(RESULT_MENU_COMMANDS):
+            return
+        menu = QMenu(self)
+        header = menu.addAction(model.language_pair)
+        header.setEnabled(False)
+        menu.addSeparator()
+        for command in RESULT_MENU_COMMANDS:
+            action = menu.addAction(command.label)
+            action.setEnabled(model.allows(command))
+            if not model.allows(command):
+                action.setToolTip(self.controller.explain(command))
+            action.triggered.connect(
+                lambda _checked=False, chosen=command: self.controller.handle(chosen)
+            )
+        menu.popup(position)
+        self.result_menu = menu
+
     def set_interaction_state(self, state: str) -> None:
         if state == "working":
             self.setCursor(Qt.CursorShape.WaitCursor)
@@ -233,7 +271,7 @@ class Overlay(QWidget):
         point = event.globalPosition().toPoint()
         self.controller.cursor_point = point
         if event.button() == Qt.MouseButton.RightButton:
-            self.controller.show_result_menu(self, point)
+            self.show_result_menu(point)
             return
         if event.button() != Qt.MouseButton.LeftButton:
             return
