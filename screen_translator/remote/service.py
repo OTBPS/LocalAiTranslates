@@ -426,6 +426,9 @@ class _Handler(BaseHTTPRequestHandler):
             self.context.policy.admit(peer)
             payload = json.loads(body.decode("utf-8"))
             fields = decode_claim(payload)
+            # Ask before claiming: a retransmitted claim returns a grant
+            # indistinguishable from a fresh one, so afterwards is too late.
+            replayed = self.context.broker.already_granted(fields["nonce"], peer)
             grant = self.context.broker.claim(
                 code=fields["code"],
                 nonce=fields["nonce"],
@@ -445,6 +448,12 @@ class _Handler(BaseHTTPRequestHandler):
         except PairingError as error:
             LOGGER.warning("Rejected pairing from %s: %s", peer, error.reason)
             self._send_json(HTTPStatus.FORBIDDEN, {"error": str(error)})
+            return
+        if replayed:
+            # The peer never received the first reply. Send it again and
+            # stop there: this is one pairing, not two.
+            LOGGER.info("Re-sent grant id=%s to %s", grant.device_id, peer)
+            self._send_json(HTTPStatus.OK, grant.to_payload())
             return
         LOGGER.info("Paired device id=%s peer=%s", grant.device_id, peer)
         # Reply first: persisting the grant is the host's own business and

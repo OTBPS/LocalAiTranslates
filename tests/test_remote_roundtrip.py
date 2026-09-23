@@ -26,6 +26,7 @@ from screen_translator.inference import InferenceCoordinator
 from screen_translator.remote.access import AccessPolicy
 from screen_translator.remote.client import RemoteBackend, RemoteError, claim_pairing
 from screen_translator.remote.pairing import REJECTION_MESSAGE as PAIRING_REJECTION
+from screen_translator.remote.pairing import new_nonce
 from screen_translator.remote.service import (
     RemoteService,
     ServiceState,
@@ -416,6 +417,29 @@ def test_a_device_pairs_with_a_code_and_then_uses_its_own_secret(host):
     backend.refresh()
     assert backend.ready(), backend.describe()
     backend.stop()
+
+
+def test_a_lost_reply_produces_one_pairing_and_not_two(host):
+    """The retry is idempotent for the peer; it has to be for the host too.
+
+    `claim` already returned the same grant, but the listener called
+    `on_paired` either way -- so a dropped reply made the host write its
+    configuration twice and reconfigure the live listener a second time
+    while the peer was still mid-handshake. The peer cannot tell a lost
+    reply from a rejection, so this is the ordinary case, not an exotic
+    one.
+    """
+    offer = host.remote.broker.open_offer()
+    nonce = new_nonce()
+
+    first = claim_pairing(host.url, offer.code, label="laptop", nonce=nonce)
+    # Same device, same nonce: what a client does when the reply never
+    # arrived.
+    second = claim_pairing(host.url, offer.code, label="laptop", nonce=nonce)
+
+    assert first.secret == second.secret, "the device would be left holding the wrong secret"
+    assert first.device_id == second.device_id
+    assert len(host.paired) == 1, f"the host reacted {len(host.paired)} times to one pairing"
 
 
 def test_pairing_needs_no_secret_but_still_needs_the_right_code(host):

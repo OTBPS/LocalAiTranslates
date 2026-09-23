@@ -190,6 +190,23 @@ class PairingBroker:
         if until:
             del self.lockouts[peer]
 
+    def already_granted(self, nonce: object, peer: str) -> bool:
+        """Whether this exact claim has already been answered.
+
+        `claim` is idempotent so a peer that lost the reply gets the same
+        grant back instead of a second secret. The host's own reaction is
+        not idempotent, though: persisting the device and announcing it
+        again for one pairing is wrong, and the caller cannot tell the two
+        cases apart afterwards because the grant is identical. So it has
+        to ask first.
+        """
+        offer = self.offer
+        return (
+            offer is not None
+            and isinstance(nonce, str)
+            and offer.claimants.get(nonce) == peer
+        )
+
     def claim(
         self,
         *,

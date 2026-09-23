@@ -188,6 +188,36 @@ def test_a_retry_after_a_lost_reply_returns_the_same_grant():
     assert first.secret == second.secret
 
 
+def test_the_host_can_tell_a_retry_apart_before_it_answers():
+    """`claim` alone cannot say; the two grants are identical.
+
+    Found by driving a real listener: the host reacted to a retransmitted
+    claim as if it were a second pairing -- writing the configuration
+    again and reconfiguring the live listener while the peer was still
+    mid-handshake.
+    """
+    subject = broker()
+    nonce = new_nonce()
+
+    assert not subject.already_granted(nonce, PEER), "nothing has been claimed yet"
+    claim(subject, nonce=nonce, peer=PEER)
+    assert subject.already_granted(nonce, PEER), "the retry was not recognised"
+
+
+def test_a_retry_from_somewhere_else_is_not_treated_as_a_retry():
+    subject = broker()
+    nonce = new_nonce()
+    claim(subject, nonce=nonce, peer=PEER)
+
+    assert not subject.already_granted(nonce, OTHER)
+
+
+@pytest.mark.parametrize("nonce", ["", None, 1234, object()])
+def test_a_nonsense_nonce_is_not_mistaken_for_a_retry(nonce):
+    subject = broker()
+    assert not subject.already_granted(nonce, PEER)
+
+
 def test_the_same_nonce_from_a_different_peer_is_refused():
     subject = broker()
     nonce = new_nonce()
