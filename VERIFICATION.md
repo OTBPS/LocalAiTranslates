@@ -1,5 +1,78 @@
 # v0.2 验证记录
 
+## v0.7.0 跨设备翻译与客户端版（2026-09-21）
+
+### 功能与质量
+
+- Ruff 通过；完整测试 **558 passed / 4 skipped**，覆盖率 **78.43%**。改动前在同一工作区实测的基线为 **377 passed / 4 skipped、74%**（高于 v0.6.0 记录的 290 passed / 73.85%，因为其后又有提交补充了测试）。跳过项仍为可选训练环境。
+- 新增测试 181 项：线格式 25、鉴权与 tailnet 解析 32、服务端与主机生命周期 24、端到端往返 14、后端选择 9、后端切换 5、跨设备配置 22、设置卡片 15、能力探测 7、瘦身版导入 5、客户端打包 11、其余为既有文件的补充。
+- 端到端往返测试在 `127.0.0.1` 上启动**真实** HTTP 服务（假引擎替代 PaddleOCR 与 llama.cpp），覆盖鉴权、事件分帧、取消、错误映射、协议版本不一致与体积上限。中间除引擎外全部是生产代码路径。
+- **取消确实跨设备生效**：客户端在收到首条 progress 后取消并关闭连接，主机在心跳写失败时取消自己的 token，假引擎观测到取消并抛出 `Cancelled`（`test_cancelling_on_the_client_cancels_the_work_on_the_host`）。这是唯一一处依赖心跳的行为——推理期间没有 progress 输出，没有心跳就检测不到断连。
+- **隐私边界保持**：往返测试在 DEBUG 级别断言日志中不出现原文、译文与密钥；服务端只记录文本块数量、设备与耗时。
+- **鉴权不可探测**：白名单未命中与密钥错误对外都返回同一句话，精确原因码只进主机日志（`test_an_unlisted_device_is_refused_indistinguishably_from_a_wrong_secret`）。
+- 修复了实现过程中自查发现的缺陷：后端切换失败时原先会连旧后端一起 `stop()`，远程后端的 session 关闭后无法复用；改为新后端构造成功后才停旧的，并加了回归测试。
+
+### 真引擎验收（`scripts/remote_check.py`，本机回环）
+
+- `host --address 127.0.0.1 --self-check`：用**真实** PaddleOCR、真实 llama.cpp（`qwen3-8b-q5-k-m`）、真实 HTTP 服务与真实本地渲染跑完整条链路，输入是脚本生成的合成 fixture 图（四行 ASCII），不读取任何真实截图。
+- 结果 `status: ok`，报告 `build/remote-check-loopback.json`：预热 16,718 ms（含 OCR 与 8B 加载）、OCR **63 ms**（4 行，CUDA）、翻译 **328 ms**（1 块，1 批，0 重试）、本地渲染 **78 ms**（1100×260，1 块绘制成功）。译文四行全部正确，段内换行保持。
+- `tailnet.discover_address()` 对真实 `tailscale ip -4` 返回本机地址 `100.100.119.102`，此前列为"未测"的 subprocess 分支已实测通过。
+- 首次运行时脚本在渲染步骤被 Qt 在 C++ 层直接 abort（退出码 9，Python 的 `except` 接不住）：`OverlayRenderer` 用 `QFontMetrics`，而脚本没有创建 `QApplication`。已修。顺带确认了一件事：进程硬崩时 `native.Job` 仍然回收了它派生的 `llama-server`，没有留下孤儿进程或端口占用。
+
+### 真引擎验收（真实 Tailscale 地址）
+
+- `host --self-check --allow 100.92.144.26`，绑定 `100.100.119.102:8765`，结果 `status: ok`，报告 `build/remote-check-tailnet.json`：预热 7,687 ms（OCR 已热）、OCR **79 ms**、翻译 **328 ms**、渲染 **32 ms**，译文与回环一致。这证明监听真实 tailnet 地址、在该地址上完成鉴权与全链路都成立。
+- 该轮暴露并修复了两个只有实跑才会出现的缺陷：
+  1. `remote_check.py` 的自检硬编码连 `127.0.0.1`，而服务只绑定单个接口地址，导致自检必然 `ConnectionError`。改为连 `status.url`。
+  2. 更实质的一个：`--allow` 指定设备白名单后，**主机连自己的服务会被自己的白名单拒绝**——源地址是主机自己的 tailnet 地址而非 `127.0.0.1`。`AccessPolicy` 新增 `local_address`，由 `RemoteService.start()` 在解析出绑定地址后填入，使"本机访问自己的服务"与回环同等对待；密钥校验不受影响，仍然必须通过。
+- `route` 字段为 `unknown` 属预期：查询的是主机自己的地址，不是 peer。真正的 direct/relay 判定要在客户端那侧跑才有意义。
+
+### 真机双设备验收（2026-09-22）
+
+- 拓扑：主机 `bopeng9950x3d`（`100.100.119.102`，RTX 4090，`qwen3-8b-q5-k-m`）；客户端 `pbt14p`（`100.92.144.26`）。主机以 `--allow 100.92.144.26` 启动，只允许这一台设备。
+- 客户端**只安装了四个依赖**（PySide6 6.11.2、numpy 2.5.3、opencv-contrib-python 4.10.0.84、requests 2.34.2），没有 PaddleOCR、没有 CUDA、没有 llama.cpp，跨设备链路即可跑通。这实测确认了客户端版的依赖边界。
+- 主机侧四个请求全部 `status=ok`：warmup 47 ms 与 0 ms（主机已热，未重新加载模型）、OCR **78 ms**（上传 71,736 字节，识别 4 行）、翻译 **625 ms**（推理 609 ms）。
+- Tailscale 会话计数 `tx 9124 rx 82036`：主机收 82 KB、回 9 KB，下行约为上行的 11%，与"只回传 `{block_id: text}`、polygon 不出截屏设备"的设计一致。
+- 连接为 `direct 172.20.6.156:41641`，未走 DERP 中继。
+- 文件分发用 Taildrop（`tailscale file cp`）；Windows 版 Tailscale 直接落盘到下载目录，`tailscale file get` 取不到待取项，这是客户端部署时的一个易踩点。
+
+### 增量补丁与主机 GUI 验收（2026-09-22）
+
+- 增量补丁 `ScreenTranslator-0.7.0-Update.exe`，**43,245,850 字节**，SHA-256 `3D4DC7B2A8AD398FF47A3F73826C345B4BA90A9B903E15B9511A2F503956453A`，`-MinimumBaseVersion 0.6.0`，未签名。以 `/SILENT` 装到既有的 0.6.0（`D:\AI\AiTranslate\Install test\ScreenTranslator\`），安装日志 `build/update-0.7.0-install.log` 记录 `Installation process succeeded` 且无需重启。
+- **增量通道足以承载本次改动**，这一点此前只是推断，现已实测：新代码引入 `http.server`、`queue`、`ipaddress` 等标准库模块，它们是纯 Python，随 PYZ 打进 `ScreenTranslator.exe`，而补丁正好替换该文件。这些模块位于 `controller` 的导入链上，缺任何一个应用都会启动失败——补丁后应用正常启动即为证据。exe 由 41,559,033 增至 41,617,726 字节（+57 KB）。
+- 共享目录边界成立：安装前后 `D:\AI\Models` 均为 83 文件 / 45,148,701,927 字节，`registry.json` SHA-256 保持 `4DC2113948FED7A95C316783D4CDF61A55A308343F7E938A9FF575876D146564`；`config.json` 未被安装器触碰。
+- **主机角色的 GUI 开关实测通过**：在设置窗口打开"作为主机为其他设备翻译"、生成密钥、白名单填 `100.92.144.26` 并保存后，`8765` 端口由 `ScreenTranslator.exe`（而非脚本）监听在 `100.100.119.102`，`auto` 正确解析为 Tailscale 地址。
+- 配置从 version 3 迁移到 4 正确：既有字段（`Ctrl+Alt+Q`、模型目录、所选模型）原样保留，新增 `service_enabled: true`、`service_address: "auto"`、`service_port: 8765`、`service_token`、`service_allowed_peers: ["100.92.144.26"]`。
+- 经 GUI 主机完成的真实跨设备截图：上传 **959,358 字节**、OCR **37 行 / 703 ms**、翻译 **18 块 / 3 批 / 8,594 ms / 0 重试**（zh-Hans → en）。会话累计收 3.4 MB、回 536 KB。
+- **鉴权拒绝路径被真实触发**：t14p 先用旧密钥连接，主机日志记录 `Rejected remote request from 100.92.144.26: invalid-token`；更新密钥后立即成功。这验证了三件事——白名单内的设备仍需通过密钥校验、精确原因码只落在主机日志、对端收到的是统一措辞。此前该路径只有单元测试覆盖。
+
+### 真机 GUI 验收（2026-09-22）
+
+- 客户端安装包 `ScreenTranslator-Client-0.7.0-Setup.exe`（101.83 MB，负载 296.58 MB，SHA-256 `B0F1866510FFB795E88380B5AA3B1C1913791B06BA764FDCE8811E56A6127EA1`）在 t14p 上**实装成功**并正常启动，设置窗口的"跨设备"卡片渲染正确。
+- 在 GUI 里选择"远程主机"、填入 `100.100.119.102:8765` 与配对密钥并保存后，后端切换到远程、状态刷新为就绪，按快捷键框选真实屏幕内容翻译成功。
+- 真实截图一次的主机侧数据：上传 **708,765 字节**、OCR **29 行 / 594 ms**（检测 78 + 识别 516）、翻译 **16 块 / 3 批 / 2437 ms / 0 重试**。会话累计收 2.0 MB、回 162 KB，下行为上行的 **7.9%**。
+- 本轮暴露并修复了一个只有长时间真实运行才会出现的缺陷：`Controller.on_readiness_tick` 每 15 秒调用一次 `schedule_ocr_warmup()`，而预热完成后令牌即被清除，导致**每个 tick 都重新预热一次**。本地是廉价空操作所以无感，远程则变成每 15 秒一次 HTTP 往返加一行主机日志。改为按后端记录 `warmup_completed`，成功后不再重复，失败或更换后端时重置以便重试。新增 `tests/test_warmup_scheduling.py` 6 项覆盖。
+
+### 打包与安装
+
+- 客户端负载 `dist/ScreenTranslatorClient`：**296.58 MB**，完整版 `dist/ScreenTranslator` 为 **6473.17 MB**，缩小约 22 倍。按 `paddle` / `paddleocr` / `nvidia` / `llama-server.exe` 四个关键字递归搜索，客户端负载**零命中**。
+- 两个安装器均用 `ISCC.exe` 实编译通过（退出码 0）：
+  - 客户端 `ScreenTranslator-Client-0.7.0-Setup.exe`，**106,774,905 字节**，SHA-256 `DE52BD40D7A2D43C5FDC6C67F606E6D39484F624887BC1D07C0EC9DBDC19C26E`，未签名。
+  - 完整版 `ScreenTranslator-0.7.0-Setup.exe`，**4,062,917,159 字节**，未签名。编译产物仅用于验证共享脚本参数化未造成回退，随后已删除；正式发布仍应走 `scripts/build.ps1` 以生成发布清单。
+- `installer.common.iss` 通过 `ClientEdition` 切换标识，`installer.client.iss` 只有 6 行并 `#include "installer.iss"`，因此安装、升级、降级保护与卸载逻辑两版共用一份，测试断言客户端脚本内不含任何 `[Setup]` / `[Files]` / `[Icons]` / `[Code]` 段。
+- 发布清单 schema 升至 2 并新增 `edition` 字段（`full` / `client`）；增量包仍限定完整版，`create_manifest` 会拒绝 `incremental + client` 组合。
+
+### 未覆盖
+
+- **未验证 DERP 中继路径**。真机验收拿到的是直连（`direct`），走中继时的实际耗时没有测量过。
+- **取消路径未在 GUI 中验证**。跨设备取消有回环端到端测试，但没有在真机上按 Esc 确认主机会立即停止推理。
+- **客户端安装器的拒绝路径未验证**。"检测到完整版即拒绝安装"这条分支只有脚本级断言；t14p 上没有装过完整版，实际未触发。
+- **增量更新未覆盖客户端版**。客户端只能整包重装，`installer.update.iss` 仍限定完整版。
+- **修复"已安装的应用"显示陈旧版本号**。`installer.update.iss` 此前只写 `DisplayVersion` 不写 `DisplayName`，列表里一直停留在最后一次完整安装的版本。补上 `DisplayName` 后重建补丁（**43,245,974 字节**，SHA-256 `94746C72C46E8524F2FA873D69397718664F3739F0404BA1B06BCDA7A221116C`）并实装：显示名由 `Screen Translator version 0.5.3` 修正为 `Screen Translator 0.7.0`，`D:\AI\Models` 仍为 45,148,701,927 字节且 registry 哈希不变。测试断言该值与 `installer.iss` 的 `AppVerName` 一致，防止两边再次跑偏。这是 0.6.0 之前的遗留问题，非本次引入。
+- **补丁包只在本机基线上验证过**。两次安装的基线都是这台机器上的既有安装，没有在干净的 0.6.0 全新安装上试过增量升级。
+- **未验证客户端安装器的实际安装行为**（包括"检测到完整版即拒绝安装"这条路径）。该逻辑有脚本级测试，但没有在干净机器上跑过 setup。
+- `tailnet.py` 的 subprocess 分支覆盖率 52%：纯解析函数有测试，实际调用 `tailscale ip -4` / `tailscale status --json` 的路径未测。
+
 ## v0.6.0 文本输入翻译工作区（2026-09-20）
 
 ### 训练适配器门槛结论

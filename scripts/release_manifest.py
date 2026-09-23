@@ -26,27 +26,40 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest().upper()
 
 
+PACKAGE_TYPES = ("full", "incremental")
+# Which payload the package carries. The client edition ships no model
+# runtime and translates through another device; it is orthogonal to whether
+# the package installs everything or patches an existing installation.
+EDITIONS = ("full", "client")
+
+
 def create_manifest(
     artifact: Path,
     version: str,
     package_type: str,
     minimum_base_version: str | None = None,
+    edition: str = "full",
 ) -> dict:
     artifact = artifact.resolve(strict=True)
     validate_version(version)
-    if package_type not in {"full", "incremental"}:
+    if package_type not in PACKAGE_TYPES:
         raise ValueError(f"unsupported package type: {package_type}")
+    if edition not in EDITIONS:
+        raise ValueError(f"unsupported edition: {edition}")
     if minimum_base_version is not None:
         validate_version(minimum_base_version)
     if package_type == "incremental" and minimum_base_version is None:
         raise ValueError("incremental packages require a minimum base version")
+    if package_type == "incremental" and edition != "full":
+        raise ValueError("incremental packages are only published for the full edition")
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "product": "Screen Translator",
         "version": version,
         "channel": "stable",
         "package_type": package_type,
+        "edition": edition,
         "architecture": "x86_64",
         "minimum_windows_build": 22000,
         "minimum_base_version": minimum_base_version,
@@ -65,8 +78,9 @@ def write_manifest(
     version: str,
     package_type: str,
     minimum_base_version: str | None = None,
+    edition: str = "full",
 ) -> dict:
-    manifest = create_manifest(artifact, version, package_type, minimum_base_version)
+    manifest = create_manifest(artifact, version, package_type, minimum_base_version, edition)
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
     temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -91,8 +105,9 @@ def main() -> int:
     parser.add_argument("artifact", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("version")
-    parser.add_argument("package_type", choices=("full", "incremental"))
+    parser.add_argument("package_type", choices=PACKAGE_TYPES)
     parser.add_argument("--minimum-base-version")
+    parser.add_argument("--edition", choices=EDITIONS, default="full")
     parser.add_argument("--verify", action="store_true")
     args = parser.parse_args()
     manifest = write_manifest(
@@ -101,6 +116,7 @@ def main() -> int:
         args.version,
         args.package_type,
         args.minimum_base_version,
+        args.edition,
     )
     if args.verify:
         verify_manifest(args.output)

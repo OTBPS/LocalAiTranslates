@@ -55,7 +55,9 @@ def main():
         lambda received: controller.activate_settings() if received == "show-settings" else None
     )
     app.aboutToQuit.connect(coordinator.close)
-    app.aboutToQuit.connect(controller.translator.stop)
+    app.aboutToQuit.connect(controller.host_service.stop)
+    # Bound lazily: changing the model in settings replaces the backend.
+    app.aboutToQuit.connect(lambda: controller.backend.stop())
     if command == "show-settings":
         QTimer.singleShot(0, controller.activate_settings)
     return app.exec()

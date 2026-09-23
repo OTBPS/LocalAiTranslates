@@ -4,6 +4,30 @@ All notable user-visible changes are recorded here. Versions follow semantic ver
 
 ## Unreleased
 
+## 0.7.0
+
+- Add cross-device translation over Tailscale: one device captures and renders, another runs OCR
+  and the translation model. Only the cropped selection is uploaded and only text comes back, so
+  the result is composited with the capturing device's own DPI and fonts.
+- Introduce a `Backend` boundary. Local and remote engines are selected once at composition time;
+  the capture pipeline, the text workspace and the overlay are unchanged in either mode.
+- Add a client edition (`ScreenTranslatorClient.spec`, `scripts/build_client.ps1`,
+  `installer.client.iss`) that ships no PaddleOCR, CUDA or llama.cpp. It reuses the shared
+  installer script, so upgrade, downgrade protection and uninstall behave identically, and it
+  refuses to install beside the full edition because both share the per-user configuration and
+  single-instance lock.
+- Serve remote requests through the existing single inference slot: a local capture preempts
+  remote and manual work, and preemptable work is now tracked as a set so several remote requests
+  can be in flight without cancelling each other.
+- Bind the host service only to a Tailscale address, never `0.0.0.0`, and require both a tailnet
+  peer address (optionally an explicit device allow-list) and a shared secret. An unresolvable
+  address stops the service with an explanation instead of listening more widely.
+- Cancel remote work by closing the connection: the host heartbeats every 0.5 s during inference,
+  and a failed write cancels the token, so pressing Esc stops the model on the other machine.
+- Release manifests gain an `edition` field (`full` or `client`); `schema_version` is now 2.
+- Configuration migrates to version 4 with the cross-device fields. Existing single-device
+  installations are unaffected, and a version 4 file is still refused by older builds.
+
 ## 0.6.0
 
 - Add a text translation workspace: type or paste text, translate it locally, cancel a running

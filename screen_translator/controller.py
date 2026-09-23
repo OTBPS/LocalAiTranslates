@@ -11,6 +11,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
+from .backend import Backend, create_backend
 from .contracts import OcrPort, RendererPort, TranslationPort
 from .core import (
     LANGUAGE_NAMES,
@@ -25,16 +26,20 @@ from .graphics import OverlayRenderer, ScreenShot, capture_region, to_array
 from .inference import CAPTURE, InferenceCoordinator
 from .logging_setup import configure_logging
 from .manual_translation import ManualTranslationController
-from .models import models_ready
 from .native import Hotkey
-from .ocr_engine import OcrEngine
 from .overlay import Overlay
+from .remote.host import HostService
+from .remote.service import ServiceState
 from .session import CaptureSession, SessionState
 from .tasks import TaskRunner
 from .theme import create_app_icon
-from .translation_engine import TranslationEngine
 
 LOGGER = logging.getLogger(__name__)
+
+# How often background readiness is re-checked.  The local backend reads the
+# model registry and the remote backend pings the host; both are cheap, and
+# polling is what lets a client notice that the host came back online.
+READINESS_INTERVAL_MS = 15000
 
 
 class Events(QObject):
@@ -52,8 +57,7 @@ class Controller(QObject):
         app: QApplication,
         settings_factory: Callable[[Controller], QWidget],
         *,
-        ocr_factory: Callable[[str, bool], OcrPort] = OcrEngine,
-        translator_factory: Callable[[str, bool, str], TranslationPort] = TranslationEngine,
+        backend_factory: Callable[[Config], Backend] = create_backend,
         renderer_factory: Callable[[], RendererPort] = OverlayRenderer,
         task_runner: TaskRunner | None = None,
         show_settings_when_models_missing: bool = True,
@@ -62,22 +66,27 @@ class Controller(QObject):
         self.app = app
         self.config = Config.load()
         configure_logging(self.config.log_level)
-        self._ocr_factory = ocr_factory
-        self._translator_factory = translator_factory
+        self._backend_factory = backend_factory
         self._renderer_factory = renderer_factory
         self.tasks = task_runner or TaskRunner()
         self.events = Events()
         self.session = CaptureSession()
         self.detected_source_language: str | None = None
-        self.ocr = self._ocr_factory(self.config.model_dir, self.config.allow_cpu)
-        self.translator = self._translator_factory(
-            self.config.model_dir, self.config.allow_cpu, self.config.translation_model
-        )
+        self.backend = self._backend_factory(self.config)
         # One shared inference slot; the provider indirection keeps engine swaps visible.
         self.inference = InferenceCoordinator(lambda: self.translator)
         self.manual = ManualTranslationController(self.inference, self.tasks, self)
+        self.host_service = HostService(
+            ocr_provider=lambda: self.ocr,
+            ready_provider=lambda: self.backend.ready(),
+            model_provider=lambda: self.config.translation_model,
+            inference=self.inference,
+            tasks=self.tasks,
+        )
         self.download_token = None
         self.ocr_warmup_token = None
+        self.readiness_token = None
+        self.warmup_completed = False
         self.overlays: list[Overlay] = []
         self.settings = settings_factory(self)
         self.capture = None
@@ -112,12 +121,27 @@ class Controller(QObject):
         if hasattr(self.settings, "exit_requested"):
             self.settings.exit_requested.connect(self.quit)
         self.refresh_language_actions()
-        if show_settings_when_models_missing and not models_ready(
-            self.config.model_dir, self.config.translation_model
-        ):
+        self.readiness_timer = QTimer(self)
+        self.readiness_timer.setInterval(READINESS_INTERVAL_MS)
+        self.readiness_timer.timeout.connect(self.on_readiness_tick)
+        self.readiness_timer.start()
+        self.refresh_readiness()
+        self.apply_host_service()
+        if show_settings_when_models_missing and not self.backend.ready():
             QTimer.singleShot(0, self.show_settings)
-        elif models_ready(self.config.model_dir, self.config.translation_model):
+        elif self.backend.ready():
             QTimer.singleShot(1000, self.schedule_ocr_warmup)
+
+    # The engines are reached through the backend so that swapping local for
+    # remote is one assignment; everything that used to read ``self.ocr``
+    # keeps working unchanged.
+    @property
+    def ocr(self) -> OcrPort:
+        return self.backend.ocr
+
+    @property
+    def translator(self) -> TranslationPort:
+        return self.backend.translator
 
     @property
     def generation(self) -> int:
@@ -139,18 +163,64 @@ class Controller(QObject):
         if self.ocr_warmup_token:
             self.ocr_warmup_token.cancel()
             self.ocr_warmup_token = None
+        self.warmup_completed = False
         self.manual.cancel()
-        self.translator.stop()
-        self.ocr = self._ocr_factory(self.config.model_dir, self.config.allow_cpu)
-        self.translator = self._translator_factory(
-            self.config.model_dir, self.config.allow_cpu, self.config.translation_model
-        )
+        try:
+            replacement = self._backend_factory(self.config)
+        except Exception as error:
+            # Keep the working backend rather than tearing it down for one
+            # that could not be built; a remote backend in particular cannot
+            # be reused once its session is closed.
+            LOGGER.warning("Backend selection failed: %s", type(error).__name__)
+            self.tray.showMessage("后端不可用", str(error))
+            return
+        previous, self.backend = self.backend, replacement
+        previous.stop()
+        self.apply_host_service()
         self.schedule_ocr_warmup()
 
+    def apply_host_service(self) -> None:
+        """Reconcile the listener with the current configuration."""
+        status = self.host_service.apply(self.config)
+        if status.state == ServiceState.FAILED:
+            self.tray.showMessage("远程服务未启动", status.detail)
+        self.settings.refresh()
+
+    def on_readiness_tick(self) -> None:
+        """Periodic UI-thread check.
+
+        Both steps are idempotent and read only cached state, so this also
+        covers the case that matters for remote mode: a host that was offline
+        at start-up becomes usable without the user restarting anything.
+        """
+        self.refresh_readiness()
+        self.schedule_ocr_warmup()
+
+    def refresh_readiness(self) -> None:
+        """Re-check backend readiness off the UI thread."""
+        if self.readiness_token:
+            return
+        token = CancellationToken()
+        self.readiness_token = token
+
+        def run():
+            try:
+                self.backend.refresh()
+            except Exception as error:
+                LOGGER.debug("Readiness refresh failed: %s", type(error).__name__)
+            finally:
+                if self.readiness_token is token:
+                    self.readiness_token = None
+
+        self.tasks.start(run, name="backend-readiness")
+
     def schedule_ocr_warmup(self) -> None:
-        if self.ocr_warmup_token or not models_ready(
-            self.config.model_dir, self.config.translation_model
-        ):
+        # Warm up once per backend, not once per readiness tick. Locally a
+        # repeat is a cheap no-op, but a remote backend turns every tick into
+        # an HTTP round trip and a line in the host log. A failure leaves the
+        # flag clear so the next tick retries, which is how a client recovers
+        # when the host comes back.
+        if self.ocr_warmup_token or self.warmup_completed or not self.backend.ready():
             return
         token = CancellationToken()
         self.ocr_warmup_token = token
@@ -159,6 +229,7 @@ class Controller(QObject):
         def run():
             try:
                 self.ocr.warmup(source_language, token, lambda _message: None)
+                self.warmup_completed = True
             except Cancelled:
                 pass
             except Exception as error:
@@ -283,10 +354,11 @@ class Controller(QObject):
         if self.busy or self.download_token:
             self.tray.showMessage("正在处理", "请等待当前任务结束")
             return
-        if not models_ready(self.config.model_dir, self.config.translation_model):
+        if not self.backend.ready():
+            self.tray.showMessage("无法截图翻译", self.backend.describe())
             self.show_settings()
             return
-        self.inference.cancel_manual()
+        self.inference.cancel_preemptable()
         self.settings.hide()
         QTimer.singleShot(120, self.begin)
 
@@ -480,12 +552,15 @@ class Controller(QObject):
     def quit(self) -> None:
         self.cancel()
         self.manual.cancel()
-        if self.ocr_warmup_token:
-            self.ocr_warmup_token.cancel()
-        if self.download_token:
-            self.download_token.cancel()
+        self.readiness_timer.stop()
+        for token in (self.ocr_warmup_token, self.download_token, self.readiness_token):
+            if token:
+                token.cancel()
         self.hotkey.close()
-        self.translator.stop()
+        # Stop accepting remote work before tearing the engines down, so an
+        # in-flight request fails cleanly instead of racing the shutdown.
+        self.host_service.stop()
+        self.backend.stop()
         self.tasks.shutdown()
         self.tray.hide()
         self.app.quit()

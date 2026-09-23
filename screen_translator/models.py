@@ -392,13 +392,29 @@ def install_models(root, token, progress, model_id=DEFAULT_MODEL_ID):
     _write_registry(root, changed)
 
 
-def models_ready(root, model_id=DEFAULT_MODEL_ID):
+def _all_registered(root, model_ids):
+    """Size-and-dependency validation only; never hashes multi-gigabyte files.
+
+    Callers poll this from the UI thread whenever the capture hotkey is
+    pressed, so it has to stay cheap.
+    """
     try:
         registry = ModelRegistry.open(root)
-        required = [model_id, *(OCR_MODEL_IDS[name] for name in OCR_NAMES)]
-        return all(registry.validate(item).valid for item in required)
+        return all(registry.validate(item).valid for item in model_ids)
     except (OSError, ValueError, KeyError, TypeError, RegistryError):
         return False
+
+
+def ocr_models_ready(root):
+    return _all_registered(root, [OCR_MODEL_IDS[name] for name in OCR_NAMES])
+
+
+def translation_model_ready(root, model_id=DEFAULT_MODEL_ID):
+    return _all_registered(root, [model_id])
+
+
+def models_ready(root, model_id=DEFAULT_MODEL_ID):
+    return _all_registered(root, [model_id, *(OCR_MODEL_IDS[name] for name in OCR_NAMES)])
 
 
 def isolate_model_for_redownload(root, model_id):

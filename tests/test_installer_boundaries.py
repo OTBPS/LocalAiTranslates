@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ("installer.iss", "installer.update.iss", "installer.common.iss", "installer.versioning.iss")
+SCRIPTS = (
+    "installer.iss",
+    "installer.client.iss",
+    "installer.update.iss",
+    "installer.common.iss",
+    "installer.versioning.iss",
+)
 SHARED_ROOTS = (r"D:\AI\Models", r"D:\AI\Training", "AI_MODEL_ROOT", "AI_TRAINING_ROOT")
 
 
@@ -39,6 +45,22 @@ def test_installers_delete_nothing_outside_the_application_directory(name):
         assert target.startswith(("{app}", "{localappdata}", "{userappdata}", "{autodesktop}", "{autoprograms}")), (
             f"{name} deletes an unexpected location: {target}"
         )
+
+
+def test_the_incremental_installer_keeps_installed_apps_showing_the_real_version():
+    # Updating only DisplayVersion left Installed Apps naming whichever
+    # version last ran a full installer, so the list disagreed with the
+    # application about what was installed.
+    script = (ROOT / "installer.update.iss").read_text(encoding="utf-8")
+    full = (ROOT / "installer.iss").read_text(encoding="utf-8")
+    written = dict(
+        re.findall(r'ValueName: "(\w+)"; ValueData: "([^"]+)"', script)
+    )
+
+    assert written["DisplayVersion"] == "{#AppVersion}"
+    assert written["DisplayName"] == "{#ProductName} {#AppVersion}"
+    # Must agree with what a full install would write for the same version.
+    assert f"AppVerName={written['DisplayName']}" in full
 
 
 def test_the_incremental_installer_does_not_create_an_uninstaller_that_could_purge_models():

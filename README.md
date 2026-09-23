@@ -1,6 +1,6 @@
 # 屏译 · Screen Translator
 
-Windows 11 本地截屏翻译，支持 Qwen3-4B-Instruct-2507 Q8_0、Qwen3-8B / Qwen3-14B Q5_K_M + PaddleOCR。
+Windows 11 本地截屏翻译，支持 Qwen3-4B-Instruct-2507 Q8_0、Qwen3-8B / Qwen3-14B Q5_K_M + PaddleOCR。v0.7 起可以让一台设备截屏、另一台设备通过 Tailscale 跑模型，见[跨设备翻译](#跨设备翻译tailscale)。
 
 ## 使用
 
@@ -13,6 +13,38 @@ v0.6 的主窗口分为“截图翻译 / 文本翻译 / 系统设置”三个工
 语言下拉框和“⇄”按钮会即时保存，无需再点击“保存设置”；翻译结果层可右键打开语言菜单并对调下一次截图的翻译方向。v0.5 使用 `D:\AI\Models\registry.json` 的稳定模型 ID 解析共享模型，训练资产位于 `D:\AI\Training\screen-translator`；应用更新和卸载不会修改这两个共享目录。旧版平面 `manifest.json` 仍可只读使用。默认不保存截图、原文、译文，无历史记录或遥测。只有用户主动下载时访问 Hugging Face；翻译 HTTP 端点只在本机回环地址监听，并要求随机密钥。
 
 v0.3 使用面向 Windows 桌面工具重新设计的设置界面：语言方向作为首要操作，模型/OCR/Qwen 状态分开展示，下载进度与错误反馈保持在模型区域，保存与截图入口固定在窗口底部；界面支持键盘焦点、150% DPI 和垂直滚动。截图覆盖层使用更清晰的状态胶囊、选区尺寸标签及高对比边角标记。
+
+## 跨设备翻译（Tailscale）
+
+v0.7 支持一台设备截屏、另一台设备跑模型。上行只发送框选区域的无损 PNG，下行只回传 `{文本块: 译文}`，渲染仍在截屏这台机器上完成，因此缩放比例和字体都是本机的。
+
+**主机（有显卡、已下载模型的那台）**：系统设置 → 跨设备 → 打开"作为主机为其他设备翻译" → 点"生成"得到配对密钥 → 保存。监听地址留 `auto` 会自动使用 `tailscale ip -4` 的地址；取不到时服务不会启动，也不会退而监听所有网卡，此时请手动填入 Tailscale 地址。"设备白名单"留空表示允许同一 tailnet 内的设备，填入对方的 Tailscale IP 可以进一步收紧。
+
+**客户端（负责截屏的那台）**：安装客户端版，系统设置 → 跨设备 → 模型运行位置选"远程主机" → 填入 `http://100.x.x.x:8765`（可以直接粘贴 `100.x.x.x:8765`）和主机生成的密钥 → 保存。之后 `Ctrl+Alt+T` 的用法完全不变。
+
+Tailscale 本身是端到端加密的 WireGuard，因此链路内不额外要求 TLS；但同一 tailnet 的其他设备仍需通过配对密钥校验。如果 `tailscale status` 显示对端是 `relay` 而不是 `direct`，流量在走 DERP 中继，上传选区会明显变慢。
+
+主机只有一个推理槽：本机截图会抢占正在进行的远程和文本翻译，远程请求会短暂排队，超过 15 秒才失败。远程请求同样不落盘，日志只记录文本块数量、设备和耗时。远程主机不可达时会明确报错，不会静默改用本地模型；远程模式下也不能同时充当主机。
+
+客户端版不含 PaddleOCR、CUDA 和 llama.cpp，安装包只有几十 MB。它与完整版共用同一份用户配置和单实例锁，因此不能装在同一台电脑上，客户端安装器检测到完整版会直接拒绝安装。
+
+```powershell
+.\scripts\build_client.ps1 -Iscc 'C:\path\to\ISCC.exe'
+```
+
+### 验收
+
+`scripts/remote_check.py` 用真实 OCR、真实 llama.cpp、真实 HTTP 服务和真实本地渲染跑完整条链路，输入是脚本生成的合成图片，不读取真实截图。主机端先自检，再让客户端连过来：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\remote_check.py --report build\remote-check.json host --self-check
+```
+
+```powershell
+.\.venv\Scripts\python.exe scripts\remote_check.py --report build\remote-check.json client --url http://100.x.x.x:8765 --secret <主机打印的密钥>
+```
+
+两端都会输出各阶段耗时和最终译文，`status` 为 `ok` 才算通过；客户端还会报告 `route` 是 `direct` 还是 `relay`。
 
 ## 增量更新
 

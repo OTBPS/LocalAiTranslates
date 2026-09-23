@@ -179,7 +179,7 @@ def test_progress_messages_carry_the_request_id():
 def test_a_new_request_cancels_the_previous_task_and_discards_its_result():
     controller, _port, runner, arbiter, events = build(runner=DeferredRunner())
     first_id = controller.translate("first", "en", "zh-Hans")
-    first_token = arbiter._manual_token
+    (first_token,) = arbiter.preemptable_tokens
     second_id = controller.translate("second", "en", "zh-Hans")
 
     assert second_id == first_id + 1

@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from .core import (
     CURRENT_CONFIG_VERSION,
     LANGUAGE_NAMES,
+    REMOTE_MODE,
     SOURCE_LANGUAGES,
     TARGET_LANGUAGES,
     CancellationToken,
@@ -40,6 +41,11 @@ from .models import (
     models_ready,
 )
 from .native import set_startup
+from .remote_settings import (
+    RemoteSettingsCard,
+    runtime_fields_changed,
+    service_fields_changed,
+)
 from .text_translation_page import TextTranslationPage
 from .theme import UI_COLORS, asset_path
 from .ui_components import ConstructivistHero, ToggleRow, make_card
@@ -188,6 +194,16 @@ class Settings(QWidget):
             self.translation_model.addItem(model.display_name, model_id)
         self.translation_model.currentIndexChanged.connect(self.model_selection_changed)
         model_layout.addWidget(self.translation_model)
+        # In remote mode this selection still governs downloads and local use,
+        # but not translation: the host decides that. Saying so is the only
+        # honest option for a control that would otherwise look effective.
+        self.model_scope_note = QLabel(
+            "远程模式下翻译使用主机的模型，此处仅用于本地模型的下载与管理。"
+        )
+        self.model_scope_note.setObjectName("helperText")
+        self.model_scope_note.setWordWrap(True)
+        self.model_scope_note.hide()
+        model_layout.addWidget(self.model_scope_note)
         self.directory_label = QLabel("模型目录")
         self.directory_label.setObjectName("fieldLabel")
         model_layout.addWidget(self.directory_label)
@@ -233,7 +249,12 @@ class Settings(QWidget):
         self.cleanup_button.clicked.connect(self.reset_models)
         actions.addWidget(self.cleanup_button)
         model_layout.addLayout(actions)
+        self.model_card = model_card
         system_layout.addWidget(model_card)
+
+        self.remote_card = RemoteSettingsCard()
+        self.remote_card.changed.connect(self.refresh)
+        system_layout.addWidget(self.remote_card)
         system_layout.addStretch()
 
         footer_bar = QFrame()
@@ -322,6 +343,7 @@ class Settings(QWidget):
             self.set_combo(self.target_language, self.c.config.target_language)
             self.set_combo(self.translation_model, self.c.config.translation_model)
             self.capture_button.setText("开始截图")
+            self.remote_card.load_config(self.c.config)
         finally:
             self.source_language.blockSignals(False)
             self.target_language.blockSignals(False)
@@ -375,11 +397,15 @@ class Settings(QWidget):
         selected_model = self.translation_model.currentData() or self.c.config.translation_model
         model = get_translation_model(selected_model)
         self.translation_model.setToolTip(self.model_tooltip(model))
-        ready = models_ready(self.directory.text(), selected_model)
+        # Two different questions: whether local weights are present (which
+        # governs downloads) and whether a capture could run right now (which
+        # in remote mode depends on the host, not on this disk).
+        local_ready = models_ready(self.directory.text(), selected_model)
+        backend_ready = self.c.backend.ready()
         self.set_status_chip(
             self.model_status,
-            "模型就绪" if ready else "模型未下载",
-            "success" if ready else "warning",
+            "模型就绪" if local_ready else "模型未下载",
+            "success" if local_ready else "warning",
         )
         for label, name, mode in (
             (self.ocr_status, "OCR", self.c.ocr.mode),
@@ -407,9 +433,14 @@ class Settings(QWidget):
         self.cpu.setEnabled(editable)
         self.save.setEnabled(editable)
         self.download_button.setEnabled(editable)
-        self.cleanup_button.setEnabled(editable and ready)
-        self.capture_button.setEnabled(editable and ready)
-        self.capture_button.setText("开始截图" if ready else "模型未就绪")
+        self.cleanup_button.setEnabled(editable and local_ready)
+        self.capture_button.setEnabled(editable and backend_ready)
+        self.capture_button.setText("开始截图" if backend_ready else "模型未就绪")
+        self.model_scope_note.setVisible(self.remote_card.mode.currentData() == REMOTE_MODE)
+        self.remote_card.set_editable(editable)
+        self.remote_card.set_status(
+            self.c.backend.describe(), self.c.host_service.status.describe()
+        )
         if hasattr(self, "text_page"):
             self.text_page.refresh()
 
@@ -440,9 +471,11 @@ class Settings(QWidget):
                 raise ValueError("请选择有效的输入和输出语言")
             if translation_model not in TRANSLATION_MODELS:
                 raise ValueError("请选择有效的翻译模型")
+            remote_values = self.remote_card.values()
             set_startup(self.startup.isChecked())
+            previous = self.c.config
             config = replace(
-                self.c.config,
+                previous,
                 version=CURRENT_CONFIG_VERSION,
                 hotkey=sequence,
                 model_dir=str(path),
@@ -451,19 +484,24 @@ class Settings(QWidget):
                 translation_model=translation_model,
                 source_language=source_language,
                 target_language=target_language,
+                **remote_values,
             )
             config.save()
             runtime_changed = (
-                config.model_dir != self.c.config.model_dir
-                or config.allow_cpu != self.c.config.allow_cpu
-                or config.translation_model != self.c.config.translation_model
+                config.model_dir != previous.model_dir
+                or config.allow_cpu != previous.allow_cpu
+                or config.translation_model != previous.translation_model
+                or runtime_fields_changed(previous, config)
             )
-            source_changed = config.source_language != self.c.config.source_language
+            source_changed = config.source_language != previous.source_language
             self.c.config = config
             if source_changed:
                 self.c.detected_source_language = None
             if runtime_changed:
+                # Rebuilding the backend already reconciles the host listener.
                 self.c.replace_engines()
+            elif service_fields_changed(previous, config):
+                self.c.apply_host_service()
             self.c.refresh_language_actions()
             self.set_status("已保存")
             self.refresh()

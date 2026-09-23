@@ -17,6 +17,28 @@ def qt_app():
     return QApplication.instance() or QApplication([])
 
 
+def fake_controller(tmp_path, **overrides):
+    """A controller stand-in with just the surface the settings window reads."""
+    state = SimpleNamespace(
+        config=Config(model_dir=str(tmp_path)),
+        busy=False,
+        download_token=None,
+        detected_source_language=None,
+        ocr=SimpleNamespace(mode="未加载"),
+        translator=SimpleNamespace(mode="未加载"),
+        backend=SimpleNamespace(ready=lambda: False, describe=lambda: "本地模型未下载"),
+        host_service=SimpleNamespace(
+            status=SimpleNamespace(describe=lambda: "远程服务未启用")
+        ),
+        language_pair_text=lambda: "自动识别 → 简体中文",
+        set_language_pair=Mock(return_value=True),
+        toggle=Mock(),
+    )
+    for name, value in overrides.items():
+        setattr(state, name, value)
+    return state
+
+
 def test_tray_menu_places_exit_after_settings_and_language_pair():
     qt_app()
     state = SimpleNamespace(show_settings=Mock(), request_quit=Mock())
@@ -82,18 +104,7 @@ def test_language_focus_is_deferred_until_window_is_visible(monkeypatch):
 
 
 def test_settings_exit_requires_confirmation_and_emits_request(monkeypatch, tmp_path):
-    controller = SimpleNamespace(
-        config=Config(model_dir=str(tmp_path)),
-        busy=False,
-        download_token=None,
-        detected_source_language=None,
-        ocr=SimpleNamespace(mode="未加载"),
-        translator=SimpleNamespace(mode="未加载"),
-        language_pair_text=lambda: "自动识别 → 简体中文",
-        set_language_pair=Mock(return_value=True),
-        toggle=Mock(),
-    )
-    settings = Settings(controller)
+    settings = Settings(fake_controller(tmp_path))
     spy = QSignalSpy(settings.exit_requested)
     monkeypatch.setattr(
         "screen_translator.settings.QMessageBox.question",
@@ -106,18 +117,12 @@ def test_settings_exit_requires_confirmation_and_emits_request(monkeypatch, tmp_
 
 def test_settings_copy_is_concise_without_removing_field_labels(monkeypatch, tmp_path):
     monkeypatch.setattr("screen_translator.settings.models_ready", lambda *_args: True)
-    controller = SimpleNamespace(
-        config=Config(model_dir=str(tmp_path)),
-        busy=False,
-        download_token=None,
-        detected_source_language=None,
-        ocr=SimpleNamespace(mode="未加载"),
-        translator=SimpleNamespace(mode="未加载"),
-        language_pair_text=lambda: "自动识别 → 简体中文",
-        set_language_pair=Mock(return_value=True),
-        toggle=Mock(),
+    settings = Settings(
+        fake_controller(
+            tmp_path,
+            backend=SimpleNamespace(ready=lambda: True, describe=lambda: "本地模型就绪"),
+        )
     )
-    settings = Settings(controller)
     visible_copy = {label.text() for label in settings.findChildren(QLabel)}
     button_copy = {button.text() for button in settings.findChildren(QPushButton)}
     assert {"输入语言", "输出语言", "全局截图快捷键", "翻译模型", "模型目录"} <= visible_copy

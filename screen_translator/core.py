@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 class Cancelled(Exception):
@@ -79,7 +81,15 @@ LANGUAGE_NAMES = {
 }
 SOURCE_LANGUAGES = tuple(LANGUAGE_NAMES)
 TARGET_LANGUAGES = tuple(code for code in LANGUAGE_NAMES if code != "auto")
-CURRENT_CONFIG_VERSION = 3
+CURRENT_CONFIG_VERSION = 4
+
+LOCAL_MODE = "local"
+REMOTE_MODE = "remote"
+APPLICATION_MODES = (LOCAL_MODE, REMOTE_MODE)
+DEFAULT_SERVICE_PORT = 8765
+AUTO_SERVICE_ADDRESS = "auto"
+MAX_SECRET_CHARACTERS = 256
+MAX_ALLOWED_PEERS = 32
 
 
 def swap_language_pair(source: str, target: str, detected: str | None = None):
@@ -121,6 +131,54 @@ def local_dir():
     return Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ScreenTranslator"
 
 
+def normalize_remote_url(value: object) -> str:
+    """Accept only a plain http(s) origin, or return an empty string.
+
+    Structural validation only.  Whether the host is actually on the tailnet
+    is a policy question and belongs to ``remote.access``; keeping it out of
+    here is what stops the configuration layer from depending on the
+    networking layer.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    text = value.strip()
+    if "://" not in text:
+        # Users copy a bare "100.101.102.103:8765" out of the host window.
+        text = f"http://{text}"
+    parsed = urlparse(text)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return ""
+    if parsed.path.strip("/") or parsed.query or parsed.params or parsed.username:
+        return ""
+    port = f":{parsed.port}" if parsed.port else ""
+    return f"{parsed.scheme}://{parsed.hostname}{port}"
+
+
+def normalize_service_address(value: object) -> str:
+    if not isinstance(value, str) or value.strip() in ("", AUTO_SERVICE_ADDRESS):
+        return AUTO_SERVICE_ADDRESS
+    try:
+        return str(ipaddress.ip_address(value.strip()))
+    except ValueError:
+        return AUTO_SERVICE_ADDRESS
+
+
+def normalize_allowed_peers(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    peers: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        try:
+            address = str(ipaddress.ip_address(item.strip()))
+        except ValueError:
+            continue
+        if address not in peers:
+            peers.append(address)
+    return tuple(peers[:MAX_ALLOWED_PEERS])
+
+
 @dataclass
 class Config:
     version: int = CURRENT_CONFIG_VERSION
@@ -132,6 +190,16 @@ class Config:
     target_language: str = "zh-Hans"
     log_level: str = "WARNING"
     allow_cpu: bool = False
+    # Client role: where this installation runs its models.
+    mode: str = LOCAL_MODE
+    remote_url: str = ""
+    remote_token: str = ""
+    # Host role: whether this installation serves other devices.
+    service_enabled: bool = False
+    service_address: str = AUTO_SERVICE_ADDRESS
+    service_port: int = DEFAULT_SERVICE_PORT
+    service_token: str = ""
+    service_allowed_peers: tuple[str, ...] = field(default_factory=tuple)
 
     @staticmethod
     def path():
@@ -154,6 +222,18 @@ class Config:
         if version == 2:
             data.setdefault("translation_model", "qwen3-14b-q5-k-m")
             version = 3
+        if version == 3:
+            # Cross-device support is additive: an existing single-device
+            # installation keeps working with these defaults untouched.
+            data.setdefault("mode", LOCAL_MODE)
+            data.setdefault("remote_url", "")
+            data.setdefault("remote_token", "")
+            data.setdefault("service_enabled", False)
+            data.setdefault("service_address", AUTO_SERVICE_ADDRESS)
+            data.setdefault("service_port", DEFAULT_SERVICE_PORT)
+            data.setdefault("service_token", "")
+            data.setdefault("service_allowed_peers", [])
+            version = 4
         data["version"] = version
         return data
 
@@ -169,9 +249,30 @@ class Config:
 
         if values.get("translation_model") not in TRANSLATION_MODELS:
             values["translation_model"] = defaults.translation_model
-        for name in ("startup", "allow_cpu"):
+        for name in ("startup", "allow_cpu", "service_enabled"):
             if not isinstance(values.get(name), bool):
                 values[name] = getattr(defaults, name)
+        if values.get("mode") not in APPLICATION_MODES:
+            values["mode"] = defaults.mode
+        values["remote_url"] = normalize_remote_url(values.get("remote_url"))
+        for name in ("remote_token", "service_token"):
+            secret = values.get(name)
+            values[name] = (
+                secret.strip()
+                if isinstance(secret, str) and len(secret) <= MAX_SECRET_CHARACTERS
+                else getattr(defaults, name)
+            )
+        values["service_address"] = normalize_service_address(values.get("service_address"))
+        port = values.get("service_port")
+        if not isinstance(port, int) or isinstance(port, bool) or not 1024 <= port <= 65535:
+            values["service_port"] = defaults.service_port
+        values["service_allowed_peers"] = normalize_allowed_peers(
+            values.get("service_allowed_peers")
+        )
+        # A remote client with no host to talk to would fail on every capture;
+        # fall back to local rather than leaving the app in a dead state.
+        if values["mode"] == REMOTE_MODE and not (values["remote_url"] and values["remote_token"]):
+            values["mode"] = LOCAL_MODE
         if values.get("source_language") not in SOURCE_LANGUAGES:
             values["source_language"] = defaults.source_language
         if values.get("target_language") not in TARGET_LANGUAGES:

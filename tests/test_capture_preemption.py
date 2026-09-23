@@ -16,7 +16,6 @@ from screen_translator.session import CaptureSession, SessionState
 
 
 def test_toggle_cancels_a_running_manual_translation_before_capturing(monkeypatch):
-    monkeypatch.setattr("screen_translator.controller.models_ready", lambda *_args: True)
     monkeypatch.setattr(QTimer, "singleShot", lambda _delay, _callback: None)
     token = CancellationToken()
     arbiter = InferenceCoordinator(lambda: None)
@@ -26,8 +25,10 @@ def test_toggle_cancels_a_running_manual_translation_before_capturing(monkeypatc
         busy=False,
         download_token=None,
         config=Config(),
+        backend=SimpleNamespace(ready=lambda: True),
         inference=arbiter,
         settings=Mock(),
+        tray=Mock(),
         begin=Mock(),
     )
 

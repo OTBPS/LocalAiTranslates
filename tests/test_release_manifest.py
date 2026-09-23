@@ -24,6 +24,41 @@ def test_incremental_manifest_requires_base_version(tmp_path):
         create_manifest(artifact, "0.4.0", "incremental")
 
 
+def test_a_full_package_defaults_to_the_full_edition(tmp_path):
+    artifact = tmp_path / "ScreenTranslator-0.7.0-Setup.exe"
+    artifact.write_bytes(b"payload")
+
+    manifest = create_manifest(artifact, "0.7.0", "full")
+
+    assert manifest["edition"] == "full"
+    assert manifest["schema_version"] == 2
+
+
+def test_a_client_package_records_its_edition(tmp_path):
+    artifact = tmp_path / "ScreenTranslator-Client-0.7.0-Setup.exe"
+    artifact.write_bytes(b"payload")
+    output = tmp_path / "ScreenTranslator-Client-0.7.0-Setup.manifest.json"
+
+    manifest = write_manifest(artifact, output, "0.7.0", "full", edition="client")
+
+    assert manifest["edition"] == "client"
+    assert verify_manifest(output) == manifest
+
+
+def test_an_unknown_edition_is_rejected(tmp_path):
+    artifact = tmp_path / "setup.exe"
+    artifact.write_bytes(b"x")
+    with pytest.raises(ValueError, match="unsupported edition"):
+        create_manifest(artifact, "0.7.0", "full", edition="lite")
+
+
+def test_incremental_packages_are_full_edition_only(tmp_path):
+    artifact = tmp_path / "update.exe"
+    artifact.write_bytes(b"x")
+    with pytest.raises(ValueError, match="only published for the full edition"):
+        create_manifest(artifact, "0.7.0", "incremental", "0.6.0", edition="client")
+
+
 def test_release_version_must_be_numeric_semver(tmp_path):
     artifact = tmp_path / "setup.exe"
     artifact.write_bytes(b"x")

@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from .core import TARGET_LANGUAGES, Cancelled, OcrLine, OcrResult
-from .models import OCR_MODEL_IDS, resolve_model_path
+from .models import OCR_MODEL_IDS, ocr_models_ready, resolve_model_path
 
 LOGGER = logging.getLogger(__name__)
 PERFORMANCE_LOGGER = logging.getLogger("screen_translator.performance")
@@ -108,6 +108,9 @@ class OcrEngine:
         self.device = None
         self.mode = "未加载"
         self.lock = threading.RLock()
+
+    def ready(self):
+        return ocr_models_ready(self.root)
 
     def _configure_environment(self):
         # All paths are explicit. Paddle must not discover/download models at inference time.

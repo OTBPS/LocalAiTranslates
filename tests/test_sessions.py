@@ -170,15 +170,16 @@ def test_language_pair_cannot_change_while_processing():
 def test_controller_schedules_content_free_ocr_warmup(monkeypatch, tmp_path):
     from screen_translator.core import Config
 
-    monkeypatch.setattr("screen_translator.controller.models_ready", lambda *_args: True)
     ocr = Mock()
     tasks = Mock()
     tasks.start.side_effect = lambda target, **_kwargs: target()
     state = SimpleNamespace(
         config=Config(model_dir=str(tmp_path), source_language="auto"),
+        backend=SimpleNamespace(ready=lambda: True),
         ocr=ocr,
         tasks=tasks,
         ocr_warmup_token=None,
+        warmup_completed=False,
     )
 
     Controller.schedule_ocr_warmup(state)

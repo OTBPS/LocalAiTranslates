@@ -22,6 +22,7 @@ from .models import (
     get_translation_model,
     resolve_model_path,
     resolve_translation_adapter,
+    translation_model_ready,
 )
 from .translation_quality import find_translation_issues, repair_list_number
 
@@ -122,6 +123,11 @@ class TranslationEngine:
             "format_repairs": 0,
             "retry_reasons": {},
         }
+
+    def ready(self):
+        if self.model_path_override is not None:
+            return self.model_path_override.is_file()
+        return translation_model_ready(self.root, self.model.model_id)
 
     def stop(self):
         with self.lock:

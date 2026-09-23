@@ -45,6 +45,11 @@ Source: "dist\ScreenTranslator\_internal\screen_translator\assets\*"; DestDir: "
 [Registry]
 ; Keep Windows Installed Apps pointed at the full installer's uninstaller.
 Root: HKCU; Subkey: "{#ProductUninstallKeyDirective}"; ValueType: string; ValueName: "DisplayVersion"; ValueData: "{#AppVersion}"
+; DisplayName is what the user actually reads in Installed Apps. Updating only
+; DisplayVersion left it showing whichever version last ran a full installer,
+; so the list disagreed with the application about what was installed. The
+; value must match AppVerName in installer.iss.
+Root: HKCU; Subkey: "{#ProductUninstallKeyDirective}"; ValueType: string; ValueName: "DisplayName"; ValueData: "{#ProductName} {#AppVersion}"
 
 [Icons]
 Name: "{autoprograms}\{#ProductName}\Screen Translator"; Filename: "{app}\{#ProductExe}"; Parameters: "--show-settings"; IconFilename: "{app}\{#ProductIcon}"; AppUserModelID: "{#ProductUserModelId}"
