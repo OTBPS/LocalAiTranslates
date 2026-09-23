@@ -36,6 +36,14 @@
 - 翻转后：`settings-v0.8.0.png`（截图页）、`settings-system.png`（系统设置页）、`settings-dark.png`（深色）、`overlay-*.png` 五态。
 - 状态条的真玻璃在离屏渲染里就能看出来：胶囊下方的渐变被糊开了，不是贴图。
 
+### 打包验收（完整链路）
+
+- `scripts/build.ps1` 全绿：ruff → 946 passed / 6 skipped、覆盖率 86.05%（门槛已提到 55）→ Paddle GPU 预检 → PyInstaller → Inno Setup → 发布清单。
+- `ScreenTranslator-0.8.0-Setup.exe` **4,063,313,914 字节（3875.08 MB）**，SHA-256 `E29455D7965B597E1F09FBF30EC03DBF3321DFE726DF5A34441B18C3E27B8A5B`，`schema_version: 2`、`edition: full`，未签名（开发产物）。
+- `ScreenTranslator.exe` 41,761,820 字节（v0.7.0 为 41,617,726，+141 KB）。`ScreenTranslator.spec` 一行未改：第二阶段新增的 `design/` 与 `widgets/` 都是纯 Python，随 PYZ 进 exe。
+- 打好的 exe 跑 `--self-test D:\AI\Models`：真实 PaddleOCR（CUDA）+ 真实 llama.cpp 两轮全绿，冷 32.08 s、热 0.92 s / OCR 47 ms / 4 块，四种语言方向译文正确。
+- `installer.update.iss` 的两条 Source 未变，assets 目录是通配投递，因此规范化后的图标与新增的 `check-dark.svg` 都能随增量包送达；`test_the_incremental_package_ships_only_the_launcher_and_ui_assets` 仍然通过。`check.svg` 保留原名，`build_update.ps1` 的完整性哨兵不受影响。
+
 ### 仍待真机目视确认
 
 - Mica 窗口材质（离屏渲染拿不到 DWM 合成）。
