@@ -72,7 +72,10 @@ def test_the_client_spec_keeps_what_the_capturing_device_needs():
 
 
 def test_the_client_build_enforces_the_size_and_content_it_promises():
-    assert "--cov-fail-under=40" in BUILD
+    # A floor, not an exact number: raising it is progress and must not
+    # mean editing a test that has nothing to do with coverage.
+    floor = re.search(r"--cov-fail-under=(\d+)", BUILD)
+    assert floor and int(floor.group(1)) >= 55
     assert "ruff check" in BUILD
     assert "release_manifest.py" in BUILD
     assert "--edition client" in BUILD

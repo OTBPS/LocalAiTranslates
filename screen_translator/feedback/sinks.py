@@ -22,7 +22,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..design import metrics
 from .notices import Notice, Severity, Surface
+
+#: Read once: a stylesheet reload does not rebuild these widgets.
+SIZES = metrics.ACTIVE
 
 _TRAY_ICON = {
     Severity.ERROR: QSystemTrayIcon.MessageIcon.Critical,
@@ -60,13 +64,15 @@ class NoticeBanner(QWidget):
         self.setObjectName("noticeBanner")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(SIZES.space_tight)
 
         self._frame = QFrame()
         self._frame.setObjectName("noticeCard")
         inner = QVBoxLayout(self._frame)
-        inner.setContentsMargins(14, 12, 14, 12)
-        inner.setSpacing(6)
+        inner.setContentsMargins(
+            SIZES.space_card, SIZES.space_row, SIZES.space_card, SIZES.space_row
+        )
+        inner.setSpacing(SIZES.space_tight)
 
         self._title = QLabel()
         self._title.setObjectName("noticeTitle")
@@ -86,7 +92,7 @@ class NoticeBanner(QWidget):
         inner.addWidget(self._progress)
 
         self._actions = QHBoxLayout()
-        self._actions.setSpacing(8)
+        self._actions.setSpacing(SIZES.space_tight)
         self._actions.addStretch()
         inner.addLayout(self._actions)
 

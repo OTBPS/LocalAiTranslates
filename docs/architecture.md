@@ -22,13 +22,19 @@ The UI may issue commands and render state, but must not perform OCR, translatio
 | Layer | Modules | May import |
 | --- | --- | --- |
 | Composition | `app`, `backend`, `controller` | everything |
-| UI | `settings`, `remote_settings`, `overlay`, `text_translation_page`, `tray`, `theme`, `ui_components`, `feedback.sinks` | flow, domain |
+| UI | `settings`, `remote_settings`, `overlay`, `text_translation_page`, `tray`, `theme`, `widgets.*`, `feedback.sinks` | flow, domain, design |
+| Design | `design.*` | **nothing from this application** |
 | Flow | `backend_service`, `languages`, `config_store`, `downloads`, `hotkeys`, `manual_translation`, `inference`, `tasks`, `capture.pipeline`, `capture.session_controller`, `remote.host`, `feedback.center` | contracts, domain |
 | Contracts | `contracts`, `capabilities`, `navigation`, `capture.view`, `feedback.confirm` | domain |
 | Domain | `core`, `session`, `download_session`, `layout`, `text_segmenter`, `translation_quality`, `onboarding`, `capture.selection`, `capture.commands`, `feedback.notices`, `remote.protocol`, `remote.access`, `remote.pairing` | stdlib only |
 | Infrastructure | `ocr_engine`, `translation_engine`, `models`, `model_registry`, `graphics`, `native`, `remote.client`, `remote.service`, `remote.tailnet` | contracts, domain |
 
 `contracts` mentions Qt only inside `TYPE_CHECKING`, and the domain layer imports nothing from the application. That is what lets the host service and a client build without the model runtimes import the same modules.
+
+`design` sits beside the layer table rather than inside it: it imports
+PySide6 and nothing else from this project, which a test enforces. That
+makes a circular import structurally impossible and lets the whole token
+layer be exercised without an application.
 
 `Controller` is an assembly root and three commands (`toggle`, `activate_settings`, `quit`). It
 owns nothing; everything it builds owns itself. This is deliberate and load-bearing: when the
@@ -39,6 +45,52 @@ does that now.
 
 Anything that shows the language pair, readiness or progress is *told*, through a Qt signal, by
 the object that owns the fact. Nothing polls the controller for it.
+
+## Appearance
+
+Three token layers. `design/primitives.py` holds raw colour and is **the
+only file in the repository allowed to contain a hex value**;
+`design/semantic.py` names roles; `design/components.py` answers
+per-component questions as functions. The last is a function rather than
+a table for one specific reason: QSS cannot reach a widget that paints
+itself, so `ToggleSwitch.paintEvent` and the stylesheet generator have to
+be able to read the same numbers.
+
+The stylesheet is generated, which makes three properties testable
+rather than aspirational: every hex in the output is a value the theme
+holds, `border-radius` is emitted from a token instead of repeated, and
+no `:focus` rule changes geometry — the resting state already declares
+the focus border width, so focus alters only the colour.
+
+Two surfaces are outside the theme, and deliberately:
+
+- **The capture overlay** has a pinned sub-palette. It paints on an
+  unknown screenshot, so the system appearance says nothing about whether
+  the region the user grabbed is light or dark. Pinned means pinned
+  against light and dark, not against the visual direction.
+- **`graphics.py`** is outside the token system entirely. Its two inks
+  are chosen per image from measured background luminance and
+  `FONT_FAMILIES` maps a language to a system font. Under a theme,
+  changing the application's appearance would change the pixels of a
+  translated picture the user saved.
+  `test_graphics_never_imports_the_design_package` keeps that separation
+  from being removed by a later tidy-up.
+
+The visual direction is Liquid-Glass-informed rather than Liquid Glass:
+QSS has no background filter, `QGraphicsBlurEffect` cannot sample what is
+behind a widget, and SF Pro cannot be redistributed. The one place real
+glass is achievable is the capture overlay's status bar, because it sits
+on a frozen `QImage`; the blur is cached on the `ScreenShot` rather than
+computed in `paintEvent`, which runs ten times a second while the model
+works. Window-level translucency is Windows 11 Mica, applied through
+`DwmSetWindowAttribute` and silently absent where the attribute is
+unknown. `design-system/screen-translator/decisions/` records all of
+this; ADR 0002 and ADR 0005 are the two to read first.
+
+Dark mode follows `AppsUseLightTheme`, read once at start-up. It ships
+with a `QPalette`, which is not optional: a stylesheet does not reach
+`QMessageBox`, `QToolTip`, spin-box arrows, the native file dialog or
+disabled text.
 
 ## Session lifecycle
 

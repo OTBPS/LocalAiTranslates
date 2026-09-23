@@ -21,8 +21,14 @@ from PySide6.QtWidgets import (
 )
 
 from .core import LANGUAGE_NAMES, SOURCE_LANGUAGES, TARGET_LANGUAGES, swap_language_pair
+from .design import metrics
 from .models import get_translation_model
 from .widgets import Card, LanguageRow, set_enabled_with_reason
+
+SIZES = metrics.ACTIVE
+#: Tall enough for a short paragraph without pushing the actions below
+#: the fold at the minimum window height.
+EDITOR_HEIGHT = 104
 
 READY_STATUS = "就绪"
 TRANSLATING_STATUS = "正在翻译…"
@@ -43,7 +49,7 @@ class TextTranslationPage(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
+        layout.setSpacing(SIZES.space_card)
 
         text_card = Card("文本翻译")
         text_layout = text_card.body
@@ -63,7 +69,7 @@ class TextTranslationPage(QWidget):
         self.source_text.setAccessibleName("原文输入框")
         self.source_text.setPlaceholderText("输入或粘贴要翻译的文本")
         self.source_text.setTabChangesFocus(True)
-        self.source_text.setMinimumHeight(104)
+        self.source_text.setMinimumHeight(EDITOR_HEIGHT)
         # Ignore the editor's own tall hint so the action row stays above the fold.
         self.source_text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         self.source_text.textChanged.connect(self.input_changed)
@@ -76,7 +82,7 @@ class TextTranslationPage(QWidget):
         self.target_text.setAccessibleName("译文输出框")
         self.target_text.setReadOnly(True)
         self.target_text.setTabChangesFocus(True)
-        self.target_text.setMinimumHeight(104)
+        self.target_text.setMinimumHeight(EDITOR_HEIGHT)
         self.target_text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         text_layout.addWidget(self.target_text, 1)
 
@@ -86,7 +92,7 @@ class TextTranslationPage(QWidget):
         text_layout.addWidget(self.status)
 
         actions = QHBoxLayout()
-        actions.setSpacing(8)
+        actions.setSpacing(SIZES.space_tight)
         self.translate_button = QPushButton("翻译")
         self.translate_button.setObjectName("primaryButton")
         self.translate_button.setToolTip("翻译（Ctrl+Enter）")

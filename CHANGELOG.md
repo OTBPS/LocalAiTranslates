@@ -35,6 +35,23 @@ All notable user-visible changes are recorded here. Versions follow semantic ver
   so revoking one does not disturb the others.
 - Pasting a secret manually still works, for a host that has not been updated yet.
 
+### Appearance
+
+- The interface is rebuilt in Apple's current design language: a light grey canvas with white
+  rounded cards, hairline separators, system blue where revolutionary red used to be, and Segoe UI
+  Variable in place of Arial Black. Red now means danger and nothing else.
+- Dark mode. The application follows the Windows per-application appearance setting, decided at
+  start-up.
+- The capture overlay's status bar is genuine frosted glass: the screenshot behind it is frozen, so
+  it can be blurred and composited rather than faked with a texture. It is the only place in the
+  application where that is possible.
+- Windows 11 draws the settings window on the Mica material. Windows 10 and older Windows 11 get an
+  opaque window instead, with nothing else changed.
+- Every disabled control keeps its reason, and the focus ring no longer shifts a control by a pixel
+  when it appears.
+- Headings no longer ask for a font weight Chinese fonts do not have, which was making them render
+  blurry at 100% scaling.
+
 ### Reliability and compatibility
 
 - The remote protocol negotiates a version instead of demanding equality, so a v0.7.0 host and a

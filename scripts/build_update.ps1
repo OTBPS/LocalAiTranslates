@@ -21,7 +21,7 @@ Push-Location $projectRoot
 try {
     & $Python -m ruff check screen_translator tests scripts
     if ($LASTEXITCODE) { throw 'Static checks failed' }
-    & $Python -m pytest -q -p no:cacheprovider --basetemp $pytestTemp --cov=screen_translator --cov-fail-under=40 --cov-report=term
+    & $Python -m pytest -q -p no:cacheprovider --basetemp $pytestTemp --cov=screen_translator --cov-fail-under=55 --cov-report=term
     if ($LASTEXITCODE) { throw 'Tests failed' }
 
     $AppVersion = (& $Python -c "from screen_translator.version import __version__; print(__version__)").Trim()

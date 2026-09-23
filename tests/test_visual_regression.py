@@ -75,6 +75,62 @@ SCENES = [
 ]
 
 
+#: States that only appear once something has gone wrong or is in
+#: progress, and so bring colours the default scenes never render.
+STATES = [
+    pytest.param("error", id="error-banner"),
+    pytest.param("progress", id="downloading"),
+]
+
+
+def enter_state(view, state: str) -> None:
+    from screen_translator.downloads import DownloadSnapshot
+    from screen_translator.feedback import error_notice
+
+    if state == "error":
+        view.notify(
+            error_notice(
+                "scene", "无法连接到主机", detail="主机未响应，请确认它已开机", context="remote"
+            )
+        )
+    elif state == "progress":
+        from screen_translator.download_session import DownloadState
+
+        view.show_download(
+            DownloadSnapshot(
+                state=DownloadState.DOWNLOADING,
+                model_id="qwen3-8b-q5-k-m",
+                file_name="Qwen3-8B-Q5_K_M.gguf",
+                fraction=0.53,
+                detail="正在下载 3.1/5.8 GB",
+                cancellable=True,
+            )
+        )
+
+
+@pytest.mark.parametrize("state", STATES)
+def test_a_reported_state_introduces_no_colour_of_its_own(qt_app, tmp_path, state):
+    theme = semantic.ACTIVE
+    view = window(qt_app, theme, metrics.ACTIVE, tmp_path)
+    try:
+        view.show()
+        view.tabs.setCurrentIndex(2)
+        enter_state(view, state)
+        qt_app.processEvents()
+
+        found = census(view.grab().toImage())
+        declared = {value.upper() for value in theme.values()}
+        strays = {
+            colour: round(share * 100, 3)
+            for colour, share in found.items()
+            if colour not in declared
+        }
+
+        assert not strays, f"{state} introduced {strays}"
+    finally:
+        view.close()
+
+
 @pytest.mark.parametrize(("width", "height", "tab"), SCENES)
 def test_every_dominant_colour_belongs_to_the_theme(qt_app, tmp_path, width, height, tab):
     theme = semantic.ACTIVE

@@ -120,10 +120,10 @@ class ToggleRow(QWidget):
         sizes = sizes or metrics.ACTIVE
         self.setObjectName("settingRow")
         row = QHBoxLayout(self)
-        row.setContentsMargins(0, 2, 0, 2)
+        row.setContentsMargins(0, sizes.space_hair * 2, 0, sizes.space_hair * 2)
         row.setSpacing(sizes.space_card)
         copy = QVBoxLayout()
-        copy.setSpacing(2)
+        copy.setSpacing(sizes.space_hair * 2)
         self.title = QLabel(title)
         self.title.setObjectName("rowTitle")
         self.title.setMinimumWidth(0)

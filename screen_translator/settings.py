@@ -31,7 +31,7 @@ from .core import (
     TARGET_LANGUAGES,
     swap_language_pair,
 )
-from .design import semantic
+from .design import metrics, semantic
 from .feedback import (
     ConfirmationRequest,
     Notice,
@@ -59,6 +59,10 @@ from .widgets import (
     themed_icon,
 )
 
+#: Read once at import: a stylesheet reload does not rebuild the window,
+#: and these numbers only matter while it is being built.
+SIZES = metrics.ACTIVE
+
 
 class Settings(QWidget):
     exit_requested = Signal()
@@ -81,8 +85,10 @@ class Settings(QWidget):
         content = QWidget()
         content.setObjectName("scrollContent")
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(26, 22, 26, 28)
-        layout.setSpacing(14)
+        layout.setContentsMargins(
+            SIZES.space_page, SIZES.space_section, SIZES.space_page, SIZES.space_page
+        )
+        layout.setSpacing(SIZES.space_card)
         scroll.setWidget(content)
         outer.addWidget(scroll)
 
@@ -110,8 +116,8 @@ class Settings(QWidget):
         language_card, language_layout = self.make_card("语言")
         self.language_card = language_card
         language_grid = QGridLayout()
-        language_grid.setHorizontalSpacing(12)
-        language_grid.setVerticalSpacing(7)
+        language_grid.setHorizontalSpacing(SIZES.space_row)
+        language_grid.setVerticalSpacing(SIZES.space_tight)
         source_label = QLabel("输入语言")
         source_label.setObjectName("fieldLabel")
         target_label = QLabel("输出语言")
@@ -129,7 +135,7 @@ class Settings(QWidget):
         self.swap_button.setIconSize(QSize(22, 22))
         self.swap_button.setAccessibleName("对调输入和输出语言")
         self.swap_button.setToolTip("对调输入和输出语言")
-        self.swap_button.setFixedSize(44, 44)
+        self.swap_button.setFixedSize(SIZES.height_icon, SIZES.height_icon)
         self.swap_button.clicked.connect(self.swap_languages)
         self.target_language = QComboBox()
         self.target_language.setAccessibleName("输出语言")
@@ -148,7 +154,7 @@ class Settings(QWidget):
         status_card, status_card_layout = self.make_card("状态")
         self.status_card = status_card
         status_row = QHBoxLayout()
-        status_row.setSpacing(8)
+        status_row.setSpacing(SIZES.space_tight)
         self.model_status = StatusChip()
         self.ocr_status = StatusChip()
         self.qwen_status = StatusChip()
@@ -214,7 +220,7 @@ class Settings(QWidget):
         self.directory_label.setObjectName("fieldLabel")
         model_layout.addWidget(self.directory_label)
         directory_row = QHBoxLayout()
-        directory_row.setSpacing(8)
+        directory_row.setSpacing(SIZES.space_tight)
         self.directory = QLineEdit(controller.config.model_dir)
         self.directory.setAccessibleName("模型保存目录")
         browse = QPushButton("浏览")
@@ -269,8 +275,10 @@ class Settings(QWidget):
         footer_bar = QFrame()
         footer_bar.setObjectName("footerBar")
         footer = QHBoxLayout(footer_bar)
-        footer.setContentsMargins(26, 12, 26, 14)
-        footer.setSpacing(10)
+        footer.setContentsMargins(
+            SIZES.space_page, SIZES.space_row, SIZES.space_page, SIZES.space_row
+        )
+        footer.setSpacing(SIZES.space_tight)
         self.exit_button = QPushButton("退出")
         self.exit_button.setObjectName("dangerButton")
         self.exit_button.clicked.connect(self.confirm_exit)
@@ -360,8 +368,8 @@ class Settings(QWidget):
     def make_page(self):
         page = QWidget()
         page_layout = QVBoxLayout(page)
-        page_layout.setContentsMargins(0, 16, 0, 0)
-        page_layout.setSpacing(14)
+        page_layout.setContentsMargins(0, SIZES.space_card, 0, 0)
+        page_layout.setSpacing(SIZES.space_card)
         return page, page_layout
 
     def confirm(self, request: ConfirmationRequest) -> bool:

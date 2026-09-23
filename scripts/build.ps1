@@ -20,7 +20,7 @@ Push-Location $projectRoot
 try {
     & $Python -m ruff check screen_translator tests scripts
     if ($LASTEXITCODE) { throw 'Static checks failed' }
-    & $Python -m pytest -q -p no:cacheprovider --basetemp $pytestTemp --cov=screen_translator --cov-fail-under=40 --cov-report=term
+    & $Python -m pytest -q -p no:cacheprovider --basetemp $pytestTemp --cov=screen_translator --cov-fail-under=55 --cov-report=term
     if ($LASTEXITCODE) { throw 'Tests failed' }
     & $Python -c "import paddle; assert paddle.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0, 'Paddle GPU runtime is unavailable'"
     if ($LASTEXITCODE) { throw 'Paddle GPU preflight failed' }

@@ -1,5 +1,47 @@
 # v0.2 验证记录
 
+## UI 重构第二阶段（2026-09-23）
+
+### 自动化
+
+- Ruff 通过；完整测试 **946 passed / 6 skipped**，覆盖率 **86.05%**。三个构建脚本的 `--cov-fail-under` 由 40 提到 **55**。
+- 新增门槛测试，全部机器可判、毫秒级：
+  - `test_contrast_ratios_meet_wcag_aa`（浅色 + 深色两套全跑，**无豁免清单**）
+  - `test_no_colour_literals_outside_the_primitive_layer`（只看字符串常量，不误伤注释与 URL）
+  - `test_layout_metrics_come_from_tokens`（`setContentsMargins` / `setSpacing` / `setFixedSize` 等的实参必须是 token，0 除外）
+  - `test_the_design_package_imports_nothing_from_the_application` 与层内方向表
+  - `test_object_names_and_stylesheet_rules_agree`（双向）
+  - `test_focus_rules_never_change_geometry`
+  - `test_graphics_never_imports_the_design_package`
+  - `test_the_token_document_matches_the_code` 与 MASTER.md 版本号 == `__version__`
+
+### 对比度测试当场抓到的三个真实缺陷
+
+这三个肉眼都看不出来，评审也抓不到，是这条门槛最直接的回报：
+
+1. Apple 的深绿 `#248A3D` 在白底 4.40:1、在画布 3.94:1，**两处都不达 AA**。改成 `#1F7A35`（5.39 / 4.83）。
+2. Apple 的发丝线 `#C6C6C8` 只有 1.7:1，用作控件边框不满足 WCAG 1.4.11 的 3:1。拆成两个角色：`stroke_separator` 继续做内容分隔（装饰，豁免），`stroke_control` 加深到 `#8A8A8E`（3.44 / 3.08）。
+3. 深色模式蓝 `#0A84FF` 压白字只有 3.65:1，与浅色模式 `#007AFF` 是同一个问题。深色模式改用同一枚 `#0066DB` 填充（白字 5.35:1），它在 `#1C1C1E` 上仍有 3.18:1 的边界对比度。
+
+### 颜色普查（Tier 2 视觉回归）
+
+明确不做像素基线：离屏文字渲染依赖本机 `msyh.ttc` 版本、Qt 构建与 ClearType 设置，必然误报、必然被绕过。改为断言**渲染结果中占面积的每一种颜色都必须是主题声明过的**——字体渲染只影响像素分布，不会凭空造出主题里没有的颜色。
+
+- 翻转前后各跑一次：`#F8F1E2 39.886% / #E9DFC8 27.166% / #FFFDFC 16.811% / #151515 6.827% / #C51D23 6.280% / #E8BC35 1.559%`，QSS 生成器接管后颜色集合完全一致，各自占比差异 **< 0.15 个百分点**。这条数据是"P3 组件重构如果把界面搞坏了，一定不是配色的锅"的依据。
+- 场景表覆盖三个标签页 + 680×600 最小尺寸，深色主题单独一份。附带一个"能不能失败"的自检测试。
+
+### 目视核对
+
+- 翻转前的构成主义界面存进 `artifacts/ui/before-liquid-glass/`，是 ADR 0002 承诺的 before/after 的前一半。
+- 翻转后：`settings-v0.8.0.png`（截图页）、`settings-system.png`（系统设置页）、`settings-dark.png`（深色）、`overlay-*.png` 五态。
+- 状态条的真玻璃在离屏渲染里就能看出来：胶囊下方的渐变被糊开了，不是贴图。
+
+### 仍待真机目视确认
+
+- Mica 窗口材质（离屏渲染拿不到 DWM 合成）。
+- 深色模式下的原生标题栏是否跟着变深。
+- 150% DPI（`QT_SCALE_FACTOR` 是进程级变量，只能 subprocess 跑）。
+
 ## 操作流程重构第一阶段（2026-09-23）
 
 ### 自动化

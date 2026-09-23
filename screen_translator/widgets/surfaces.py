@@ -110,7 +110,7 @@ class AppHeader(QWidget):
         self.setObjectName("appHeader")
         column = QVBoxLayout(self)
         column.setContentsMargins(0, 0, 0, 0)
-        column.setSpacing(2)
+        column.setSpacing(sizes.space_hair * 2)
         self.title = QLabel(title)
         self.title.setObjectName("appTitle")
         column.addWidget(self.title)

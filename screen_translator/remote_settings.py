@@ -34,8 +34,11 @@ from .core import (
     normalize_remote_url,
     normalize_service_address,
 )
+from .design import metrics
 from .remote.access import MINIMUM_SECRET_CHARACTERS, generate_secret
-from .ui_components import ToggleRow, make_card
+from .widgets import Card, ToggleRow
+
+SIZES = metrics.ACTIVE
 
 MODE_LABELS = ((LOCAL_MODE, "本地模型"), (REMOTE_MODE, "远程主机"))
 #: The picker always offers this, so a host that Tailscale cannot see --
@@ -58,11 +61,10 @@ class RemoteSettingsCard(QWidget):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
+        layout.setSpacing(SIZES.space_card)
 
-        card, card_layout = make_card(
-            "跨设备", "让另一台设备负责截屏，由这台或另一台主机运行模型"
-        )
+        card = Card("跨设备", "让另一台设备负责截屏，由这台或另一台主机运行模型")
+        card_layout = card.body
         layout.addWidget(card)
 
         card_layout.addWidget(_field_label("模型运行位置"))
@@ -76,14 +78,14 @@ class RemoteSettingsCard(QWidget):
         self.client_group = QWidget()
         client_layout = QVBoxLayout(self.client_group)
         client_layout.setContentsMargins(0, 0, 0, 0)
-        client_layout.setSpacing(7)
+        client_layout.setSpacing(SIZES.space_tight)
 
         # Pick the host from the tailnet rather than typing an address the
         # user has to look up first. Tailscale already knows the device
         # name, the operating system and whether it is online.
         client_layout.addWidget(_field_label("主机设备"))
         picker_row = QHBoxLayout()
-        picker_row.setSpacing(8)
+        picker_row.setSpacing(SIZES.space_tight)
         self.device_picker = QComboBox()
         self.device_picker.setAccessibleName("主机设备")
         self.device_picker.addItem(MANUAL_DEVICE_LABEL, "")
@@ -96,7 +98,7 @@ class RemoteSettingsCard(QWidget):
 
         client_layout.addWidget(_field_label("配对码（在主机上生成）"))
         code_row = QHBoxLayout()
-        code_row.setSpacing(8)
+        code_row.setSpacing(SIZES.space_tight)
         self.pairing_code = QLineEdit()
         self.pairing_code.setAccessibleName("配对码")
         self.pairing_code.setPlaceholderText("六位数字")
@@ -141,10 +143,10 @@ class RemoteSettingsCard(QWidget):
         self.host_group = QWidget()
         host_layout = QVBoxLayout(self.host_group)
         host_layout.setContentsMargins(0, 0, 0, 0)
-        host_layout.setSpacing(7)
+        host_layout.setSpacing(SIZES.space_tight)
         address_grid = QGridLayout()
-        address_grid.setHorizontalSpacing(12)
-        address_grid.setVerticalSpacing(7)
+        address_grid.setHorizontalSpacing(SIZES.space_row)
+        address_grid.setVerticalSpacing(SIZES.space_tight)
         address_grid.addWidget(_field_label("监听地址"), 0, 0)
         address_grid.addWidget(_field_label("端口"), 0, 1)
         self.service_address = QLineEdit()
@@ -162,7 +164,7 @@ class RemoteSettingsCard(QWidget):
         # digits out loud, done. No 43-character string changes hands.
         host_layout.addWidget(_field_label("配对码"))
         offer_row = QHBoxLayout()
-        offer_row.setSpacing(8)
+        offer_row.setSpacing(SIZES.space_tight)
         self.pairing_offer = QLabel("未开始配对")
         self.pairing_offer.setObjectName("pairingCode")
         self.pairing_offer.setAccessibleName("当前配对码")
@@ -179,7 +181,7 @@ class RemoteSettingsCard(QWidget):
 
         host_layout.addWidget(_field_label("配对密钥（旧版设备手动复制）"))
         secret_row = QHBoxLayout()
-        secret_row.setSpacing(8)
+        secret_row.setSpacing(SIZES.space_tight)
         self.service_token = QLineEdit()
         self.service_token.setAccessibleName("主机配对密钥")
         self.service_token.setReadOnly(True)
