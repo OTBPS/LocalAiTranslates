@@ -53,6 +53,18 @@
 - 颜色从 `design.primitives` 导入，测试断言生成脚本里没有色值字面量——旧图标正是因为写死了四个色值，才比它所属的设计方向多活了两个版本。
 - **修掉一处文档与代码不符**：v0.5.1 的发布说明写了"安装或更新后通知 Explorer"，但没有任何 iss 脚本包含该调用。新增共享的 `installer.shell.iss`（`SHChangeNotify` + `SHCNE_ASSOCCHANGED`），完整版 / 客户端 / 增量三个脚本都在 `ssPostInstall` 调用，并加了断言。三个版本没被发现，是因为图标一直没变过。
 - **PyInstaller 会复用缓存的 exe**：它对 EXE 阶段的陈旧判断比的是路径不是内容，所以同路径重新生成 ICO 之后，exe 旁边的 assets 更新了，**烤进 exe 里的图标没更新**——重新打包会报成功并装上旧图标。三个构建脚本已加 `--clean`，并有断言。这个只能靠直接读 exe 的 RT_ICON 资源才看得见：`ExtractAssociatedIcon` 走 shell，返回的是缓存里那份，会跟着一起错。
+- **三个发布包（2026-09-23 11:24–11:28，图标与滚轮修复之后重打）**：
+
+  | 类型 | 文件 | 字节 | SHA-256 | 基线 |
+  |---|---|---|---|---|
+  | 完整版 | `ScreenTranslator-0.8.0-Setup.exe` | 4,063,357,431 | `A26FDA247E29E6522FDE88FDB3D464C2697641D45DB9F25032910C863CA0EDA1` | — |
+  | 客户端版 | `ScreenTranslator-Client-0.8.0-Setup.exe` | 106,960,536 | `202C37AB815C581BBE2DC2E8C5153AAAE43A2621D55CB6DA0D5C0A2A7F1BCAEA` | — |
+  | 增量包 | `ScreenTranslator-0.8.0-Update.exe` | 43,431,750 | `FDA83A1044E3877E10876FDD875DC10F153AE8B0A2D5A24B37C53D3B1DC0C054` | 0.7.0 |
+
+  三者均未签名（开发产物）。客户端载荷 296.76 MB，仍在 400 MB 上限内。增量包基线取 0.7.0：本分支未改动 `.spec`、`requirements*.txt`、`pyproject.toml` 与 `runtime/`，改的全是 Python 代码与 assets，正落在增量通道适用范围内。
+- 完整版载荷复验：exe 内嵌图标 256 px 取样 `(0, 103, 219)`、包内 ICO 与源文件逐字节一致、`check-dark.svg` 已投递、`screen_translator.widgets.inputs` 在 PYZ 内。
+- **构建前置检查**：`scripts/build.preflight.ps1`，三脚本共用，在任何慢活之前拦截"载荷目录里的应用还在跑"。`--clean` 要整个删掉载荷目录，应用一跑就锁住自己的 `.pyd`，原先的表现是 shutil 深处抛 `PermissionError`，最后一行是本地化的 Windows 报错，完全不指向真实原因。实测三种情形：空闲静默通过、能真的检出、**不会**因仓库内那份已安装的 0.7.0 在托盘而误拦（匹配的是 `dist\<载荷>` 而非项目根）。
+- 写这个前置检查时踩到并修掉一个约定问题：提示最初写成中文，而 **Windows PowerShell 5.1 在无 BOM 时按 ANSI 读 `.ps1`**，结果不是消息乱码而是整份文件解析失败。现有三个构建脚本本来都是纯 ASCII 无 BOM，已改回英文并加 `test_build_scripts_stay_ascii` 盯住。
 - `ISCC.exe` 实编译 `installer.update.iss` 与 `installer.client.iss`（后者 include 完整版脚本）均 exit 0，产出 43,389,774 / 106,775,978 字节的真实安装包。第一次编译**失败**并被抓到：`installer.shell.iss` 的头部注释用了 `;`，那在 `[Code]` 段里不是注释而是空语句。已改为 `//`。
 
 ### 仍待真机目视确认

@@ -17,6 +17,12 @@ if (-not $pytestTemp.StartsWith((Join-Path $projectRoot 'build') + [System.IO.Pa
     throw 'Unexpected test temporary directory'
 }
 
+. (Join-Path $PSScriptRoot 'build.preflight.ps1')
+# Before anything slow: --clean wipes the payload directory, and a
+# packaged application still running from it holds its own files
+# open. Failing here names the cause; failing later does not.
+Assert-PayloadNotRunning -PayloadDirectories @((Join-Path $projectRoot 'dist\ScreenTranslator'))
+
 Push-Location $projectRoot
 try {
     & $Python -m ruff check screen_translator tests scripts

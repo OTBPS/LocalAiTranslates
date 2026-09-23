@@ -95,3 +95,51 @@ def test_the_shell_refresh_is_declared_once_and_shared():
     for name in ("installer.iss", "installer.update.iss"):
         script = (ROOT / name).read_text(encoding="utf-8")
         assert "shell32.dll" not in script
+
+
+BUILD_SCRIPTS = {
+    "build.ps1": r"dist\ScreenTranslator",
+    "build_update.ps1": r"dist\ScreenTranslator",
+    "build_client.ps1": r"dist\ScreenTranslatorClient",
+}
+
+
+@pytest.mark.parametrize(("name", "payload"), BUILD_SCRIPTS.items())
+def test_the_build_refuses_to_clean_a_payload_that_is_running(name, payload):
+    """--clean deletes the payload, so a running copy of it breaks the build.
+
+    Without the guard that surfaces as a PermissionError twenty frames
+    inside shutil, ending in a localised Windows message that names a
+    .pyd and not the cause.
+    """
+    script = (ROOT / "scripts" / name).read_text(encoding="utf-8")
+
+    assert "build.preflight.ps1" in script
+    assert "Assert-PayloadNotRunning" in script
+    assert payload in script
+    # Before the slow work, or the guard saves nothing.
+    assert script.index("Assert-PayloadNotRunning") < script.index("PyInstaller")
+
+
+def test_the_preflight_only_blocks_on_the_payload_not_the_whole_repository():
+    shared = (ROOT / "scripts" / "build.preflight.ps1").read_text(encoding="utf-8")
+
+    # A test installation lives under this repository. It holds nothing
+    # the build touches, so matching the project root would refuse to
+    # build whenever the installed copy sat in the tray.
+    assert "$projectRoot" not in shared
+    assert "PayloadDirectories" in shared
+
+
+@pytest.mark.parametrize("name", ("build.ps1", "build_client.ps1", "build_update.ps1", "build.preflight.ps1"))
+def test_build_scripts_stay_ascii(name):
+    """Windows PowerShell reads a .ps1 as ANSI unless it carries a BOM.
+
+    A non-ASCII literal in one of these does not produce a mangled
+    message, it produces a parse error -- which is how this was found.
+    """
+    raw = (ROOT / "scripts" / name).read_bytes()
+
+    assert not raw.startswith(b"\xef\xbb\xbf"), "no BOM is the existing convention"
+    offenders = [byte for byte in raw if byte > 0x7F]
+    assert not offenders, f"{name} has {len(offenders)} non-ASCII bytes"
