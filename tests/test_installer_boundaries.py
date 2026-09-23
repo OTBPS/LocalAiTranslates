@@ -36,6 +36,36 @@ def test_the_incremental_package_ships_only_the_launcher_and_ui_assets():
     assert not any(source.endswith((".gguf", ".pdmodel", ".pdiparams")) for source in sources)
 
 
+def test_the_incremental_build_will_not_guess_which_installs_it_can_patch():
+    """`-MinimumBaseVersion` must be supplied, never defaulted.
+
+    The patch delivers the executable and the assets directory and
+    nothing else -- the Python runtime, PySide6, PaddleOCR and llama.cpp
+    all stay as the base installation left them. So this value is a
+    promise about which installations the patch actually fits, and the
+    convention every release has followed is "the previous release".
+
+    It used to carry a default of 0.3.0, correct when the script was
+    written and stale from the next release onwards, because each build
+    passed the value explicitly and nobody exercised the default again.
+    Building without the flag then produced a package claiming it could
+    patch an installation five releases old -- precisely the outcome the
+    value exists to prevent, announced in a manifest as though it had
+    been checked.
+    """
+    script = (ROOT / "scripts" / "build_update.ps1").read_text(encoding="utf-8")
+
+    declaration = re.search(r"\[string\]\$MinimumBaseVersion\s*=\s*\"([^\"]*)\"", script)
+    assert declaration, "the parameter is no longer declared as a string"
+    assert declaration.group(1) == "", (
+        f"a default of {declaration.group(1)!r} lets a bare build ship a false promise"
+    )
+    # An empty default only helps if something refuses it.
+    assert "if (-not $MinimumBaseVersion)" in script, (
+        "nothing rejects the empty value, so a bare build would write an empty manifest field"
+    )
+
+
 @pytest.mark.parametrize("name", ("installer.iss", "installer.update.iss"))
 def test_installers_delete_nothing_outside_the_application_directory(name):
     script = (ROOT / name).read_text(encoding="utf-8")

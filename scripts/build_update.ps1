@@ -1,7 +1,15 @@
 param(
     [string]$Python = "$PSScriptRoot\..\.venv\Scripts\python.exe",
     [string]$Iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-    [string]$MinimumBaseVersion = "0.3.0",
+    # No default on purpose. This value is the promise that the patch may
+    # be applied to a given installation, and the patch carries only the
+    # executable and the assets directory -- the Python runtime, PySide6,
+    # PaddleOCR and llama.cpp all stay as the base install left them. The
+    # old default of 0.3.0 was correct when this script was written and
+    # then rotted, because every release since has passed the value
+    # explicitly. A bare invocation silently widened the promise by five
+    # releases, which is the exact failure the value exists to prevent.
+    [string]$MinimumBaseVersion = "",
     [string]$SignToolName = "",
     [switch]$SkipAppBuild
 )
@@ -32,6 +40,7 @@ try {
 
     $AppVersion = (& $Python -c "from screen_translator.version import __version__; print(__version__)").Trim()
     if ($AppVersion -notmatch '^\d+\.\d+\.\d+$') { throw "Application version must be numeric SemVer: $AppVersion" }
+    if (-not $MinimumBaseVersion) { throw 'Minimum base version is required: pass -MinimumBaseVersion <previous release>, for example 0.7.0' }
     if ($MinimumBaseVersion -notmatch '^\d+\.\d+\.\d+$') { throw "Minimum base version must be numeric SemVer: $MinimumBaseVersion" }
     $AppFileVersion = "$AppVersion.0"
 
