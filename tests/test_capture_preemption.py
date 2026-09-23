@@ -1,16 +1,15 @@
 import os
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-import numpy
 import pytest
 from PySide6.QtCore import QRect, QTimer
 from PySide6.QtGui import QImage
 
 from screen_translator.controller import Controller
-from screen_translator.core import CancellationToken, Config, OcrLine, OcrResult, TranslatedBlock
+from screen_translator.core import CancellationToken, Cancelled, Config
 from screen_translator.feedback import Occupancy
 from screen_translator.inference import MANUAL, InferenceBusy, InferenceCoordinator
 from screen_translator.session import CaptureSession, SessionState
@@ -85,37 +84,19 @@ def test_translation_warmup_is_skipped_while_another_task_owns_the_slot():
     translator.start.assert_called_once()
 
 
-def test_capture_pipeline_holds_the_inference_slot_for_the_whole_translation(monkeypatch):
-    monkeypatch.setattr("screen_translator.controller.to_array", lambda _image: numpy.zeros((4, 4, 3), "uint8"))
-    monkeypatch.setattr(
-        "screen_translator.controller.capture_region",
-        lambda _screens, _selection: SimpleNamespace(image=QImage(4, 4, QImage.Format.Format_RGB888)),
-    )
-    observed = {}
+def capture_state(pipeline, session=None):
+    """The controller surface `selected()` touches, and nothing more.
 
-    class Engine:
-        mode = "CUDA"
-
-        def translate(self, blocks, token, progress, source, target, detected):
-            observed["owner"] = arbiter.owner
-            try:
-                with arbiter.reserve(MANUAL):
-                    observed["manual"] = "granted"
-            except InferenceBusy:
-                observed["manual"] = "refused"
-            return [TranslatedBlock(block, "译文") for block in blocks]
-
-    arbiter = InferenceCoordinator(Engine)
-    session = CaptureSession()
-    session.begin()
-    session.transition(SessionState.PROCESSING)
+    What the pipeline itself does is covered by test_capture_pipeline.py;
+    this is about the wiring between a session and that pipeline.
+    """
+    session = session or CaptureSession()
+    if session.state == SessionState.IDLE:
+        session.begin()
     events = SimpleNamespace(
-        progress=Mock(),
-        done=Mock(),
-        failed=Mock(),
-        language_detected=Mock(),
+        progress=Mock(), done=Mock(), failed=Mock(), language_detected=Mock()
     )
-    state = SimpleNamespace(
+    return SimpleNamespace(
         selection=QRect(0, 0, 40, 40),
         screens=[],
         session=session,
@@ -124,26 +105,69 @@ def test_capture_pipeline_holds_the_inference_slot_for_the_whole_translation(mon
         overlays=[Mock()],
         capture=None,
         config=Config(source_language="en", target_language="zh-Hans"),
-        inference=arbiter,
         events=events,
-        ocr=SimpleNamespace(
-            recognize=lambda *_args: OcrResult(
-                [OcrLine([(0, 0), (80, 0), (80, 18), (0, 18)], "Hello", 0.99)], "en", "CUDA", {}
-            )
-        ),
-        _renderer_factory=lambda: SimpleNamespace(
-            render=lambda *_args, **_kwargs: QImage(4, 4, QImage.Format.Format_RGB888)
-        ),
-        translator=SimpleNamespace(last_metrics={}),
+        build_pipeline=lambda _generation: pipeline,
         tasks=SimpleNamespace(start=lambda target, name: target()),
         refresh_language_actions=Mock(),
+        notices=Mock(),
         message="",
     )
 
-    with patch.object(Controller, "cancel", Mock()):
-        Controller.selected(state)
 
-    assert observed == {"owner": "capture", "manual": "refused"}
-    events.failed.emit.assert_not_called()
-    events.done.emit.assert_called_once()
-    assert arbiter.owner is None
+def test_a_successful_capture_reports_the_rendered_result(monkeypatch):
+    monkeypatch.setattr(
+        "screen_translator.controller.capture_region",
+        lambda _screens, _selection: SimpleNamespace(
+            image=QImage(4, 4, QImage.Format.Format_RGB888)
+        ),
+    )
+    pipeline = SimpleNamespace(
+        run=lambda request, token, progress: SimpleNamespace(rendered="image")
+    )
+    state = capture_state(pipeline)
+
+    Controller.selected(state)
+
+    state.events.done.emit.assert_called_once()
+    assert state.events.done.emit.call_args.args[1] == "image"
+    state.events.failed.emit.assert_not_called()
+
+
+def test_a_cancelled_capture_reports_no_result_rather_than_a_failure(monkeypatch):
+    monkeypatch.setattr(
+        "screen_translator.controller.capture_region",
+        lambda _screens, _selection: SimpleNamespace(
+            image=QImage(4, 4, QImage.Format.Format_RGB888)
+        ),
+    )
+
+    def cancelled(*_args):
+        raise Cancelled()
+
+    state = capture_state(SimpleNamespace(run=cancelled))
+
+    Controller.selected(state)
+
+    assert state.events.done.emit.call_args.args[1] is None
+    state.events.failed.emit.assert_not_called()
+
+
+def test_a_failed_capture_reports_a_message_meant_for_a_reader(monkeypatch):
+    monkeypatch.setattr(
+        "screen_translator.controller.capture_region",
+        lambda _screens, _selection: SimpleNamespace(
+            image=QImage(4, 4, QImage.Format.Format_RGB888)
+        ),
+    )
+
+    def broken(*_args):
+        raise KeyError("internal detail")
+
+    state = capture_state(SimpleNamespace(run=broken))
+
+    Controller.selected(state)
+
+    state.events.done.emit.assert_not_called()
+    message = state.events.failed.emit.call_args.args[1]
+    assert "KeyError" in message
+    assert "internal detail" not in message

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from collections.abc import Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -11,6 +10,7 @@ from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
 from .backend import Backend, create_backend
+from .capture import CapturePipeline, CaptureRequest, describe_failure
 from .config_store import ConfigStore
 from .contracts import OcrPort, RendererPort, TranslationPort
 from .core import (
@@ -19,7 +19,6 @@ from .core import (
     CancellationToken,
     Cancelled,
     Config,
-    merge_lines,
     swap_language_pair,
 )
 from .downloads import DownloadCoordinator
@@ -32,9 +31,9 @@ from .feedback import (
     error_notice,
 )
 from .feedback.sinks import TraySink
-from .graphics import OverlayRenderer, ScreenShot, capture_region, to_array
+from .graphics import OverlayRenderer, ScreenShot, capture_region, to_bgr
 from .hotkeys import HotkeyService
-from .inference import CAPTURE, InferenceCoordinator
+from .inference import InferenceCoordinator
 from .logging_setup import configure_logging
 from .manual_translation import ManualTranslationController
 from .navigation import Destination
@@ -595,69 +594,39 @@ class Controller(QObject):
         source_language = self.config.source_language
         target_language = self.config.target_language
 
+        pipeline = self.build_pipeline(generation)
+        request = CaptureRequest(capture.image, source_language, target_language)
+
         def run():
             try:
-
-                def progress(text):
-                    self.events.progress.emit(generation, text)
-
-                import cv2
-
-                ocr_result = self.ocr.recognize(
-                    cv2.cvtColor(to_array(capture.image), cv2.COLOR_RGB2BGR),
-                    source_language,
+                outcome = pipeline.run(
+                    request,
                     token,
-                    progress,
+                    lambda text: self.events.progress.emit(generation, text),
                 )
-                self.events.language_detected.emit(generation, ocr_result.detected_language)
-                blocks = merge_lines(ocr_result.lines)
-                if not blocks:
-                    raise RuntimeError("没有识别到清晰的横排文字")
-                translation_started = time.monotonic()
-                with self.inference.reserve(CAPTURE) as engine:
-                    translated = engine.translate(
-                        blocks,
-                        token,
-                        progress,
-                        source_language,
-                        target_language,
-                        ocr_result.detected_language,
-                    )
-                translation_ms = (time.monotonic() - translation_started) * 1000
-                render_started = time.monotonic()
-                result = self._renderer_factory().render(
-                    capture.image,
-                    translated,
-                    token,
-                    target_language,
-                )
-                render_ms = (time.monotonic() - render_started) * 1000
-                metrics = getattr(self.translator, "last_metrics", {})
-                logging.getLogger("screen_translator.performance").info(
-                    "Pipeline timing ms device=%s blocks=%d batches=%d retries=%d format_repairs=%d "
-                    "ocr=%.1f translation=%.1f render=%.1f",
-                    ocr_result.device,
-                    len(blocks),
-                    metrics.get("batches", 0),
-                    metrics.get("quality_retries", 0),
-                    metrics.get("format_repairs", 0),
-                    ocr_result.timings_ms.get("total", 0.0),
-                    translation_ms,
-                    render_ms,
-                )
-                token.check()
-                self.events.done.emit(generation, result)
+                self.events.done.emit(generation, outcome.rendered)
             except Cancelled:
                 self.events.done.emit(generation, None)
             except Exception as error:
-                message = (
-                    str(error)
-                    if isinstance(error, RuntimeError)
-                    else f"处理失败（{type(error).__name__}），请检查模型或重新启动"
-                )
-                self.events.failed.emit(generation, message)
+                self.events.failed.emit(generation, describe_failure(error))
 
         self.tasks.start(run, name=f"capture-pipeline-{generation}")
+
+    def build_pipeline(self, generation: int) -> CapturePipeline:
+        """Assemble the pipeline for one capture.
+
+        The generation is bound here so a late language detection cannot be
+        applied to a newer session.
+        """
+        return CapturePipeline(
+            ocr_provider=lambda: self.ocr,
+            inference=self.inference,
+            renderer_factory=self._renderer_factory,
+            to_bgr=to_bgr,
+            on_language_detected=lambda language: self.events.language_detected.emit(
+                generation, language
+            ),
+        )
 
     def progress(self, generation: int, text: str) -> None:
         if self.session.is_current(generation) and self.overlays:

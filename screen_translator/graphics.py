@@ -16,6 +16,16 @@ def to_array(image):
     )
 
 
+def to_bgr(image):
+    """Convert a Qt image to the BGR array OCR expects.
+
+    The conversion lives here rather than in the pipeline so that the
+    pipeline has no OpenCV import to satisfy, and can therefore be tested
+    with a plain array factory and no Qt application.
+    """
+    return cv2.cvtColor(to_array(image), cv2.COLOR_RGB2BGR)
+
+
 def from_array(array):
     array = np.ascontiguousarray(array)
     return QImage(
