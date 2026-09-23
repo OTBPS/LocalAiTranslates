@@ -9,6 +9,7 @@ mapping.
 import logging
 import threading
 import time
+from types import SimpleNamespace
 
 import numpy
 import pytest
@@ -23,7 +24,8 @@ from screen_translator.core import (
 )
 from screen_translator.inference import InferenceCoordinator
 from screen_translator.remote.access import AccessPolicy
-from screen_translator.remote.client import RemoteBackend, RemoteError
+from screen_translator.remote.client import RemoteBackend, RemoteError, claim_pairing
+from screen_translator.remote.pairing import REJECTION_MESSAGE as PAIRING_REJECTION
 from screen_translator.remote.service import (
     RemoteService,
     ServiceState,
@@ -95,12 +97,14 @@ class Host:
             ready_provider=lambda: ready,
             model_provider=lambda: "qwen3-14b-q5-k-m",
         )
+        self.paired = []
         self.remote = RemoteService(
             service,
             AccessPolicy(secret),
             self.tasks,
             address="127.0.0.1",
             port=0,
+            on_paired=lambda grant, peer: self.paired.append((grant, peer)),
         )
         status = self.remote.start()
         assert status.state == ServiceState.RUNNING, status.detail
@@ -391,4 +395,67 @@ def test_remote_traffic_does_not_write_user_text_to_the_log(host, caplog):
     recorded = "\n".join(record.getMessage() for record in caplog.records)
     for secret_content in ("Hello", "World", "译[", SECRET):
         assert secret_content not in recorded
+    backend.stop()
+
+
+def test_a_device_pairs_with_a_code_and_then_uses_its_own_secret(host):
+    """The whole point: no 43-character secret is ever read off a screen."""
+    offer = host.remote.broker.open_offer()
+    host.remote.broker.host_label = "workstation"
+
+    grant = claim_pairing(host.url, offer.code, label="laptop")
+
+    assert grant.host_label == "workstation"
+    assert [peer for _grant, peer in host.paired] == ["127.0.0.1"]
+    # The secret the host just issued has to actually work, which means
+    # the policy it was added to is the one the listener is using.
+    host.remote.set_device_secrets(
+        [SimpleNamespace(device_id=grant.device_id, secret=grant.secret)]
+    )
+    backend = RemoteBackend(host.url, grant.secret)
+    backend.refresh()
+    assert backend.ready(), backend.describe()
+    backend.stop()
+
+
+def test_pairing_needs_no_secret_but_still_needs_the_right_code(host):
+    host.remote.broker.open_offer()
+
+    with pytest.raises(RemoteError) as error:
+        claim_pairing(host.url, "000000" if host.remote.broker.offer.code != "000000" else "111111")
+
+    assert PAIRING_REJECTION in str(error.value)
+
+
+def test_a_claim_with_no_offer_open_says_nothing_about_whether_one_exists(host):
+    with pytest.raises(RemoteError) as error:
+        claim_pairing(host.url, "123456")
+
+    # Identical to a wrong code, so the route cannot be used to ask
+    # whether this host happens to be pairing right now.
+    assert PAIRING_REJECTION in str(error.value)
+
+
+def test_an_oversized_claim_body_is_refused_without_being_read(host):
+    host.remote.broker.open_offer()
+
+    with pytest.raises(RemoteError):
+        claim_pairing(host.url, host.remote.broker.offer.code, label="x" * 4096)
+
+    # The offer survives: the request never reached the code comparison,
+    # so it must not have cost an attempt either.
+    assert host.remote.broker.offer.attempts == 0
+
+
+def test_the_host_secret_keeps_working_after_a_device_is_paired(host):
+    """Downgrade safety: v0.7.0 clients hold the shared secret."""
+    offer = host.remote.broker.open_offer()
+    grant = claim_pairing(host.url, offer.code)
+    host.remote.set_device_secrets(
+        [SimpleNamespace(device_id=grant.device_id, secret=grant.secret)]
+    )
+
+    backend = client(host.url)
+
+    assert backend.ready()
     backend.stop()

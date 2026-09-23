@@ -16,6 +16,7 @@ from ..core import Config
 from ..inference import InferenceCoordinator
 from ..tasks import TaskRunner
 from .access import AccessPolicy
+from .pairing import PairingBroker, PairingGrant, PairingOffer
 from .service import (
     RemoteService,
     ServiceState,
@@ -38,6 +39,9 @@ class HostService:
         inference: InferenceCoordinator,
         tasks: TaskRunner,
         service_factory=RemoteService,
+        # Called with a fresh grant so the owner can persist it. The
+        # listener never touches configuration itself.
+        on_paired: Callable[[PairingGrant, str], None] | None = None,
     ):
         self._service = TranslationService(
             ocr_provider=ocr_provider,
@@ -47,6 +51,7 @@ class HostService:
         )
         self._tasks = tasks
         self._service_factory = service_factory
+        self._on_paired = on_paired or (lambda _grant, _peer: None)
         self._running: RemoteService | None = None
         self._signature: tuple[object, ...] | None = None
         self._status = ServiceStatus()
@@ -54,6 +59,24 @@ class HostService:
     @property
     def status(self) -> ServiceStatus:
         return self._running.status if self._running else self._status
+
+    @property
+    def broker(self) -> PairingBroker | None:
+        """The open pairing window, or None when the listener is not up."""
+        return self._running.broker if self._running else None
+
+    def offer_pairing(self, host_label: str = "") -> PairingOffer | None:
+        """Open a window and return the code to read out loud."""
+        broker = self.broker
+        if broker is None:
+            return None
+        broker.host_label = host_label
+        return broker.open_offer()
+
+    def cancel_pairing(self) -> None:
+        broker = self.broker
+        if broker is not None:
+            broker.cancel()
 
     @staticmethod
     def _signature_of(config: Config) -> tuple[object, ...]:
@@ -86,11 +109,19 @@ class HostService:
             return self._status
         signature = self._signature_of(config)
         if self._running is not None and signature == self._signature:
+            # Per-device secrets are swapped into the live policy rather
+            # than counted in the signature: restarting the listener the
+            # instant a device pairs would drop the connection that just
+            # paired with it.
+            self._running.set_device_secrets(config.paired_devices)
             return self._running.status
         self.stop()
         policy = AccessPolicy(
             secret=config.service_token,
             allowed_peers=frozenset(config.service_allowed_peers),
+            device_secrets=tuple(
+                (device.device_id, device.secret) for device in config.paired_devices
+            ),
         )
         service = self._service_factory(
             self._service,
@@ -98,6 +129,7 @@ class HostService:
             self._tasks,
             address=config.service_address,
             port=config.service_port,
+            on_paired=self._on_paired,
         )
         status = service.start()
         if status.state == ServiceState.RUNNING:

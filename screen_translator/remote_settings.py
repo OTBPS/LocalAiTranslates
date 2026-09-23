@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from .core import (
     AUTO_SERVICE_ADDRESS,
+    DEFAULT_SERVICE_PORT,
     LOCAL_MODE,
     REMOTE_MODE,
     Config,
@@ -37,6 +38,9 @@ from .remote.access import MINIMUM_SECRET_CHARACTERS, generate_secret
 from .ui_components import ToggleRow, make_card
 
 MODE_LABELS = ((LOCAL_MODE, "本地模型"), (REMOTE_MODE, "远程主机"))
+#: The picker always offers this, so a host that Tailscale cannot see --
+#: or a build with no Tailscale at all -- is still reachable by address.
+MANUAL_DEVICE_LABEL = "手动填写地址"
 
 
 def _field_label(text: str) -> QLabel:
@@ -73,12 +77,44 @@ class RemoteSettingsCard(QWidget):
         client_layout = QVBoxLayout(self.client_group)
         client_layout.setContentsMargins(0, 0, 0, 0)
         client_layout.setSpacing(7)
+
+        # Pick the host from the tailnet rather than typing an address the
+        # user has to look up first. Tailscale already knows the device
+        # name, the operating system and whether it is online.
+        client_layout.addWidget(_field_label("主机设备"))
+        picker_row = QHBoxLayout()
+        picker_row.setSpacing(8)
+        self.device_picker = QComboBox()
+        self.device_picker.setAccessibleName("主机设备")
+        self.device_picker.addItem(MANUAL_DEVICE_LABEL, "")
+        self.device_picker.currentIndexChanged.connect(self._device_chosen)
+        self.refresh_devices_button = QPushButton("刷新")
+        self.refresh_devices_button.setAccessibleName("刷新 Tailscale 设备列表")
+        picker_row.addWidget(self.device_picker, 1)
+        picker_row.addWidget(self.refresh_devices_button)
+        client_layout.addLayout(picker_row)
+
+        client_layout.addWidget(_field_label("配对码（在主机上生成）"))
+        code_row = QHBoxLayout()
+        code_row.setSpacing(8)
+        self.pairing_code = QLineEdit()
+        self.pairing_code.setAccessibleName("配对码")
+        self.pairing_code.setPlaceholderText("六位数字")
+        self.pairing_code.setMaxLength(16)
+        self.pair_button = QPushButton("配对")
+        self.pair_button.setAccessibleName("使用配对码连接主机")
+        code_row.addWidget(self.pairing_code, 1)
+        code_row.addWidget(self.pair_button)
+        client_layout.addLayout(code_row)
+
         client_layout.addWidget(_field_label("远程主机地址"))
         self.remote_url = QLineEdit()
         self.remote_url.setAccessibleName("远程主机地址")
         self.remote_url.setPlaceholderText("http://100.101.102.103:8765")
         client_layout.addWidget(self.remote_url)
-        client_layout.addWidget(_field_label("配对密钥"))
+        # Still here, and still works: a v0.7.0 host has no pairing route,
+        # and a user mid-upgrade must not be stranded.
+        client_layout.addWidget(_field_label("配对密钥（旧版主机或手动填写）"))
         self.remote_token = QLineEdit()
         self.remote_token.setAccessibleName("配对密钥")
         self.remote_token.setEchoMode(QLineEdit.EchoMode.Password)
@@ -122,7 +158,26 @@ class RemoteSettingsCard(QWidget):
         address_grid.setColumnStretch(0, 1)
         host_layout.addLayout(address_grid)
 
-        host_layout.addWidget(_field_label("配对密钥（复制到另一台设备）"))
+        # The host half of the code flow: press the button, read six
+        # digits out loud, done. No 43-character string changes hands.
+        host_layout.addWidget(_field_label("配对码"))
+        offer_row = QHBoxLayout()
+        offer_row.setSpacing(8)
+        self.pairing_offer = QLabel("未开始配对")
+        self.pairing_offer.setObjectName("pairingCode")
+        self.pairing_offer.setAccessibleName("当前配对码")
+        self.offer_button = QPushButton("生成配对码")
+        self.offer_button.setAccessibleName("生成配对码")
+        offer_row.addWidget(self.pairing_offer, 1)
+        offer_row.addWidget(self.offer_button)
+        host_layout.addLayout(offer_row)
+
+        self.paired_devices = QLabel("尚无已配对设备")
+        self.paired_devices.setObjectName("helperText")
+        self.paired_devices.setWordWrap(True)
+        host_layout.addWidget(self.paired_devices)
+
+        host_layout.addWidget(_field_label("配对密钥（旧版设备手动复制）"))
         secret_row = QHBoxLayout()
         secret_row.setSpacing(8)
         self.service_token = QLineEdit()
@@ -161,6 +216,47 @@ class RemoteSettingsCard(QWidget):
         # the rule is visible before the user saves rather than after.
         self.service_row.setEnabled(not remote)
         self.host_group.setVisible(self.service_enabled.isChecked() and not remote)
+
+    def show_devices(self, peers, *, error: str = "") -> None:
+        """Fill the picker from the tailnet, keeping the current choice."""
+        chosen = self.device_picker.currentData()
+        self.device_picker.blockSignals(True)
+        try:
+            self.device_picker.clear()
+            self.device_picker.addItem(MANUAL_DEVICE_LABEL, "")
+            for peer in peers:
+                self.device_picker.addItem(f"{peer.label} · {peer.describe()}", peer.address)
+            index = self.device_picker.findData(chosen) if chosen else 0
+            self.device_picker.setCurrentIndex(max(0, index))
+        finally:
+            self.device_picker.blockSignals(False)
+        if error:
+            self.client_status.setText(error)
+        elif not peers:
+            self.client_status.setText("Tailscale 上没有其他设备，请确认另一台设备已登录")
+
+    def _device_chosen(self) -> None:
+        """Turn a picked device into an address, without erasing a typed one."""
+        address = self.device_picker.currentData()
+        if address:
+            self.remote_url.setText(f"http://{address}:{DEFAULT_SERVICE_PORT}")
+        self.changed.emit()
+
+    def show_pairing_offer(self, offer) -> None:
+        """Display the open code, or why there is not one."""
+        if offer is None:
+            self.pairing_offer.setText("启用主机服务并保存后即可生成配对码")
+            return
+        self.pairing_offer.setText(offer.describe())
+
+    def show_paired_devices(self, devices) -> None:
+        if not devices:
+            self.paired_devices.setText("尚无已配对设备")
+            return
+        # Names and addresses only; the secret is never rendered.
+        self.paired_devices.setText(
+            "已配对：" + "、".join(f"{item.label}（{item.address}）" for item in devices)
+        )
 
     def _generate_secret(self) -> None:
         self.service_token.setText(generate_secret())
@@ -205,6 +301,11 @@ class RemoteSettingsCard(QWidget):
             self.service_port,
             self.generate_button,
             self.allowed_peers,
+            self.device_picker,
+            self.refresh_devices_button,
+            self.pairing_code,
+            self.pair_button,
+            self.offer_button,
         ):
             widget.setEnabled(editable)
         self._update_visibility()

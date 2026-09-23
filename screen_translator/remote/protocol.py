@@ -39,6 +39,14 @@ MAX_LINES = 4096
 MAX_POLYGON_POINTS = 64
 MAX_EVENT_BYTES = 8 * 1024 * 1024
 
+#: The only route that runs without a secret, because it is how a device
+#: gets one. Named here rather than in the host service so the thin
+#: client can reach it without importing anything host-side.
+PAIR_CLAIM_PATH = "/v1/pair/claim"
+#: A claim is two short strings. The cap is what stops an unauthenticated
+#: peer making the host buffer anything worth buffering.
+MAX_CLAIM_BYTES = 512
+
 EVENT_PROGRESS = "progress"
 EVENT_RESULT = "result"
 EVENT_ERROR = "error"

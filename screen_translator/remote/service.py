@@ -33,11 +33,20 @@ from ..inference import REMOTE, InferenceBusy, InferenceCoordinator
 from ..tasks import TaskRunner
 from ..version import __version__
 from .access import AccessDenied, AccessPolicy, is_loopback_address, is_tailnet_address
+from .pairing import REJECTION_MESSAGE as PAIRING_REJECTION
+from .pairing import (
+    PairingBroker,
+    PairingError,
+    PairingGrant,
+    decode_claim,
+)
 from .protocol import (
     EVENT_ERROR,
     EVENT_PROGRESS,
     EVENT_RESULT,
+    MAX_CLAIM_BYTES,
     MAX_IMAGE_BYTES,
+    PAIR_CLAIM_PATH,
     PROTOCOL_VERSION,
     SUPPORTED_PROTOCOL_VERSIONS,
     ProtocolError,
@@ -283,6 +292,13 @@ class ServiceContext:
     tasks: TaskRunner
     request_id: int = 0
     lock: threading.Lock = field(default_factory=threading.Lock)
+    #: The pairing window, when one is open. Held in the process rather
+    #: than exposed as an endpoint: a `/v1/pair/status` route would let
+    #: anyone on the tailnet ask whether the host is currently pairing.
+    broker: PairingBroker = field(default_factory=PairingBroker)
+    #: Called with a fresh grant so the host can persist it. Set by the
+    #: owner; the transport never touches configuration.
+    on_paired: Callable[[PairingGrant, str], None] = lambda _grant, _peer: None
 
     def next_request_id(self) -> int:
         with self.lock:
@@ -394,7 +410,59 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._send_json(HTTPStatus.OK, self.context.service.health())
 
+    def _handle_pair_claim(self) -> None:
+        """The one route that runs without a secret, because it issues one.
+
+        The address check still applies, so the caller is already inside
+        the tailnet. The body is capped far below anything else here: a
+        claim is two short strings, and this is the only place an
+        unauthenticated peer can make the host read at all.
+        """
+        peer = self.client_address[0]
+        body = self._read_body(MAX_CLAIM_BYTES)
+        if body is None:
+            return
+        try:
+            self.context.policy.admit(peer)
+            payload = json.loads(body.decode("utf-8"))
+            fields = decode_claim(payload)
+            grant = self.context.broker.claim(
+                code=fields["code"],
+                nonce=fields["nonce"],
+                peer=peer,
+                label=fields["label"],
+                protocol=getattr(self, "agreed_version", PROTOCOL_VERSION),
+            )
+        except AccessDenied as error:
+            LOGGER.warning("Rejected pairing from %s: %s", peer, error)
+            self._send_json(HTTPStatus.FORBIDDEN, {"error": REJECTION_MESSAGE})
+            return
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            # Deliberately the pairing rejection, not "bad JSON": the shape
+            # of the failure must not say whether an offer is even open.
+            self._send_json(HTTPStatus.FORBIDDEN, {"error": PAIRING_REJECTION})
+            return
+        except PairingError as error:
+            LOGGER.warning("Rejected pairing from %s: %s", peer, error.reason)
+            self._send_json(HTTPStatus.FORBIDDEN, {"error": str(error)})
+            return
+        LOGGER.info("Paired device id=%s peer=%s", grant.device_id, peer)
+        # Reply first: persisting the grant is the host's own business and
+        # must not delay the answer the peer is waiting on.
+        self._send_json(HTTPStatus.OK, grant.to_payload())
+        self.context.on_paired(grant, peer)
+
     def do_POST(self) -> None:
+        if self.path == PAIR_CLAIM_PATH:
+            # Before `_authorize`: the caller cannot have a secret yet,
+            # which is the entire point of the route.
+            if negotiate(self.headers.get("X-Protocol-Version")) is None:
+                self._drain_body()
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": PAIRING_REJECTION})
+                return
+            self.agreed_version = negotiate(self.headers.get("X-Protocol-Version"))
+            self._handle_pair_claim()
+            return
         if not self._authorize():
             return
         routes = {
@@ -491,8 +559,14 @@ class RemoteService:
         *,
         address: str = AUTO_ADDRESS,
         port: int = DEFAULT_PORT,
+        on_paired: Callable[[PairingGrant, str], None] | None = None,
     ):
-        self._context = ServiceContext(service=service, policy=policy, tasks=tasks)
+        self._context = ServiceContext(
+            service=service,
+            policy=policy,
+            tasks=tasks,
+            on_paired=on_paired or (lambda _grant, _peer: None),
+        )
         self._tasks = tasks
         self._address = address
         self._port = port
@@ -504,6 +578,23 @@ class RemoteService:
     def status(self) -> ServiceStatus:
         with self._lock:
             return self._status
+
+    @property
+    def broker(self) -> PairingBroker:
+        """The pairing window, read directly by the host's own UI.
+
+        In-process rather than behind an endpoint: a `/v1/pair/status`
+        route would let anyone on the tailnet ask whether this host is
+        currently pairing, which is one more thing to probe for nothing.
+        """
+        return self._context.broker
+
+    def set_device_secrets(self, devices) -> None:
+        """Replace the per-device credentials without restarting the listener."""
+        self._context.policy = replace(
+            self._context.policy,
+            device_secrets=tuple((item.device_id, item.secret) for item in devices),
+        )
 
     def _set_status(self, status: ServiceStatus) -> None:
         with self._lock:

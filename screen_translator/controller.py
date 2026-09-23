@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
-from PySide6.QtCore import QObject, QTimer
+from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QWidget
 
 from .backend import Backend, create_backend
@@ -31,6 +31,7 @@ from .feedback import (
     Occupancy,
     Severity,
     error_notice,
+    success_notice,
 )
 from .feedback.sinks import TraySink
 from .graphics import OverlayRenderer
@@ -43,6 +44,7 @@ from .navigation import Destination
 from .onboarding import OnboardingPlan, StartupIntent, evaluate
 from .overlay import Overlay
 from .remote.host import HostService
+from .remote.pairing import remember
 from .remote.service import ServiceState
 from .tasks import TaskRunner
 from .tray import TrayIcon
@@ -51,6 +53,10 @@ LOGGER = logging.getLogger(__name__)
 
 
 class Controller(QObject):
+    #: A device completed pairing. Carried across the thread boundary from
+    #: the HTTP worker that served the claim.
+    device_paired = Signal(object, str)
+
     def __init__(
         self,
         app: QApplication,
@@ -121,7 +127,11 @@ class Controller(QObject):
             model_provider=lambda: self.config.translation_model,
             inference=self.inference,
             tasks=self.tasks,
+            # Emitted rather than called: the claim is handled on an HTTP
+            # worker thread, and configuration is written on the UI one.
+            on_paired=lambda grant, peer: self.device_paired.emit(grant, peer),
         )
+        self.device_paired.connect(self.on_device_paired)
 
         self.downloads = DownloadCoordinator(
             tasks=self.tasks, notices=self.notices, parent=self
@@ -422,6 +432,25 @@ class Controller(QObject):
             self.show_settings()
             self.settings.navigate(plan.destination)
         return plan
+
+    def on_device_paired(self, grant, peer: str) -> None:
+        """Remember a device that just paired, and say so.
+
+        Runs on the UI thread; the listener hands the grant over through a
+        signal because it serves the claim on an HTTP worker.
+        """
+        self.configuration.update(
+            paired_devices=remember(self.config.paired_devices, grant, peer)
+        )
+        self.apply_host_service()
+        self.notices.post(
+            success_notice(
+                "device-paired",
+                "设备已配对",
+                detail=f"{grant.label or peer} 现在可以使用这台主机翻译",
+                context="remote",
+            )
+        )
 
     def on_capture_failed(self, message: str) -> None:
         """Report a capture failure somewhere it cannot be silenced.

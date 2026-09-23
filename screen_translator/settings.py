@@ -1,5 +1,6 @@
 """Main application window: capture, text translation, and system settings."""
 
+import platform
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, Signal
@@ -264,6 +265,9 @@ class Settings(QWidget):
 
         self.remote_card = RemoteSettingsCard()
         self.remote_card.changed.connect(self.refresh)
+        self.remote_card.refresh_devices_button.clicked.connect(self.discover_devices)
+        self.remote_card.pair_button.clicked.connect(self.pair_with_host)
+        self.remote_card.offer_button.clicked.connect(self.offer_pairing)
         system_layout.addWidget(self.remote_card)
         system_layout.addStretch()
 
@@ -566,8 +570,69 @@ class Settings(QWidget):
         self.remote_card.set_status(
             self.c.backend.describe(), self.c.host_service.status.describe()
         )
+        self.remote_card.show_pairing_offer(getattr(self.c.host_service, "broker", None) and
+                                            self.c.host_service.broker.offer)
+        self.remote_card.show_paired_devices(self.c.config.paired_devices)
         if hasattr(self, "text_page"):
             self.text_page.refresh()
+
+    def discover_devices(self) -> None:
+        """Fill the picker from the local Tailscale state."""
+        from .remote.tailnet import TailnetUnavailable, read_status
+
+        try:
+            status = read_status()
+        except TailnetUnavailable as error:
+            self.remote_card.show_devices((), error=str(error))
+            return
+        self.remote_card.show_devices(status.peers)
+
+    def pair_with_host(self) -> bool:
+        """Swap the six digits the user read out for this device's secret."""
+        from .remote.client import RemoteError, claim_pairing
+        from .remote.pairing import normalize_code
+
+        code = normalize_code(self.remote_card.pairing_code.text())
+        address = self.remote_card.remote_url.text().strip()
+        if not code:
+            self.notify(error_notice("pairing", "配对码无效", detail="配对码是六位数字"))
+            return False
+        if not address:
+            self.notify(
+                error_notice("pairing", "请先选择主机", detail="从设备列表选择，或手动填写主机地址")
+            )
+            return False
+        try:
+            grant = claim_pairing(address, code, label=platform.node())
+        except RemoteError as error:
+            self.notify(error_notice("pairing", "配对失败", detail=str(error)))
+            return False
+        self.remote_card.remote_token.setText(grant.secret)
+        self.remote_card.pairing_code.clear()
+        self.notify(
+            success_notice(
+                "pairing",
+                "配对成功",
+                detail=f"已连接到 {grant.host_label or address}，请保存设置",
+            )
+        )
+        self.refresh()
+        return True
+
+    def offer_pairing(self) -> bool:
+        """Open a pairing window on this host and show the code."""
+        offer = self.c.host_service.offer_pairing(host_label=platform.node())
+        if offer is None:
+            self.notify(
+                error_notice(
+                    "pairing",
+                    "主机服务未运行",
+                    detail="请先启用「作为主机为其他设备翻译」并保存设置",
+                )
+            )
+            return False
+        self.remote_card.show_pairing_offer(offer)
+        return True
 
     def set_status(self, text):
         """Model-card status line. Download progress and model paths only.

@@ -14,6 +14,8 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from .access import is_tailnet_address
@@ -81,11 +83,64 @@ def discover_address() -> str:
     return addresses[0]
 
 
-def parse_peer_route(document: object, peer_address: str) -> str:
-    """Classify a peer connection as ``direct``, ``relay`` or ``unknown``.
+ROUTE_DIRECT = "direct"
+ROUTE_RELAY = "relay"
+ROUTE_UNKNOWN = "unknown"
 
-    A relayed connection still works but pushes every screenshot through a
-    DERP server, which is the usual explanation for a slow remote capture.
+_OS_NAMES = {
+    "windows": "Windows",
+    "macOS": "macOS",
+    "linux": "Linux",
+    "iOS": "iOS",
+    "android": "Android",
+}
+
+
+@dataclass(frozen=True)
+class TailnetPeer:
+    """One device on the tailnet, as the picker needs to show it."""
+
+    host_name: str
+    dns_name: str
+    address: str
+    operating_system: str = ""
+    online: bool = False
+    route: str = ROUTE_UNKNOWN
+    node_id: str = ""
+
+    @property
+    def label(self) -> str:
+        """What to show in a list. The host name is what the user named it."""
+        return self.host_name or self.dns_name or self.address
+
+    def describe(self) -> str:
+        parts = [_OS_NAMES.get(self.operating_system, self.operating_system)]
+        parts.append("在线" if self.online else "离线")
+        if self.online and self.route == ROUTE_RELAY:
+            # Worth saying: a relayed connection works but pushes every
+            # screenshot through a DERP server, which is the usual
+            # explanation for a slow remote capture.
+            parts.append("中继")
+        elif self.online and self.route == ROUTE_DIRECT:
+            parts.append("直连")
+        return " · ".join(part for part in parts if part)
+
+
+@dataclass(frozen=True)
+class TailnetStatus:
+    self_peer: TailnetPeer | None = None
+    peers: tuple[TailnetPeer, ...] = ()
+    magic_dns_suffix: str = ""
+
+    def find(self, address: str) -> TailnetPeer | None:
+        for peer in self.peers:
+            if peer.address == address:
+                return peer
+        return None
+
+
+def classify_route(peer: Mapping[str, object]) -> str:
+    """Classify one peer entry as ``direct``, ``relay`` or ``unknown``.
 
     ``CurAddr`` is checked first and that order matters. ``Relay`` names the
     peer's *home* DERP region and is populated even on a direct connection, so
@@ -94,29 +149,85 @@ def parse_peer_route(document: object, peer_address: str) -> str:
     ``tests/data/tailscale_status.json`` for a recorded example of the two
     fields being set at once.
     """
-    if not isinstance(document, dict):
-        return "unknown"
+    if peer.get("CurAddr"):
+        return ROUTE_DIRECT
+    if peer.get("Relay"):
+        return ROUTE_RELAY
+    return ROUTE_UNKNOWN
+
+
+def _peer_address(peer: Mapping[str, object]) -> str:
+    addresses = peer.get("TailscaleIPs")
+    if not isinstance(addresses, list):
+        return ""
+    for value in addresses:
+        if isinstance(value, str) and is_tailnet_address(value):
+            return value
+    return ""
+
+
+def _decode_peer(payload: object) -> TailnetPeer | None:
+    if not isinstance(payload, Mapping):
+        return None
+    address = _peer_address(payload)
+    if not address:
+        # No IPv4 in the CGNAT range means nothing here can reach it.
+        return None
+    dns_name = payload.get("DNSName")
+    return TailnetPeer(
+        host_name=str(payload.get("HostName") or ""),
+        dns_name=str(dns_name or "").rstrip("."),
+        address=address,
+        operating_system=str(payload.get("OS") or ""),
+        online=bool(payload.get("Online")),
+        route=classify_route(payload),
+        node_id=str(payload.get("PublicKey") or ""),
+    )
+
+
+def parse_status(document: object) -> TailnetStatus:
+    """Turn ``tailscale status --json`` into the devices a user can pick.
+
+    Pure, so the device picker is testable against a recorded document
+    rather than whatever tailnet the developer happens to be on.
+    """
+    if not isinstance(document, Mapping):
+        return TailnetStatus()
     peers = document.get("Peer")
-    if not isinstance(peers, dict):
-        return "unknown"
-    for peer in peers.values():
-        if not isinstance(peer, dict):
-            continue
-        addresses = peer.get("TailscaleIPs")
-        if not isinstance(addresses, list) or peer_address not in addresses:
-            continue
-        if peer.get("CurAddr"):
-            return "direct"
-        if peer.get("Relay"):
-            return "relay"
-        return "unknown"
-    return "unknown"
+    decoded = []
+    if isinstance(peers, Mapping):
+        for payload in peers.values():
+            peer = _decode_peer(payload)
+            if peer is not None:
+                decoded.append(peer)
+    # Online first, then by the name the user gave the machine.
+    decoded.sort(key=lambda peer: (not peer.online, peer.label.lower()))
+    return TailnetStatus(
+        self_peer=_decode_peer(document.get("Self")),
+        peers=tuple(decoded),
+        magic_dns_suffix=str(document.get("MagicDNSSuffix") or ""),
+    )
+
+
+def parse_peer_route(document: object, peer_address: str) -> str:
+    """Classify a peer connection. A thin wrapper so there is one parser."""
+    peer = parse_status(document).find(peer_address)
+    return peer.route if peer is not None else ROUTE_UNKNOWN
+
+
+def read_status() -> TailnetStatus:
+    """Ask Tailscale who else is on the tailnet. Raises `TailnetUnavailable`."""
+    try:
+        document = json.loads(_run(["status", "--json"]))
+    except json.JSONDecodeError as error:
+        raise TailnetUnavailable("tailscale status 返回的不是合法 JSON") from error
+    return parse_status(document)
 
 
 def peer_route(peer_address: str) -> str:
     """Best-effort route classification; never raises."""
     try:
-        return parse_peer_route(json.loads(_run(["status", "--json"])), peer_address)
-    except (TailnetUnavailable, json.JSONDecodeError) as error:
+        return read_status().find(peer_address).route
+    except (TailnetUnavailable, AttributeError) as error:
         LOGGER.debug("Tailscale route lookup failed: %s", type(error).__name__)
-        return "unknown"
+        return ROUTE_UNKNOWN

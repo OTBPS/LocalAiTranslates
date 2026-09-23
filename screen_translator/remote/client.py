@@ -17,11 +17,14 @@ from dataclasses import dataclass, replace
 import requests
 
 from ..core import CancellationToken, OcrResult, TextBlock, TranslatedBlock
+from .access import MINIMUM_SECRET_CHARACTERS
+from .pairing import PairingGrant, identify, new_nonce, normalize_code
 from .protocol import (
     EVENT_ERROR,
     EVENT_PROGRESS,
     EVENT_RESULT,
     MAX_IMAGE_BYTES,
+    PAIR_CLAIM_PATH,
     PROTOCOL_VERSION,
     ProtocolError,
     apply_translation,
@@ -387,3 +390,83 @@ class RemoteBackend:
 
     def stop(self) -> None:
         self._endpoint.close()
+
+
+def claim_pairing(
+    base_url: str,
+    code: str,
+    *,
+    label: str = "",
+    nonce: str | None = None,
+    session: requests.Session | None = None,
+    timeout: float = HEALTH_TIMEOUT,
+) -> PairingGrant:
+    """Exchange a code the user read off the host for this device's secret.
+
+    The one request that carries no credential, because it is how the
+    credential is obtained. The nonce makes a retry after a lost reply
+    return the same grant instead of consuming a second attempt.
+    """
+    owned = session is None
+    session = session or requests.Session()
+    session.trust_env = False
+    payload = {
+        "code": normalize_code(code) or str(code),
+        "nonce": nonce or new_nonce(),
+        "label": label,
+    }
+    try:
+        response = session.post(
+            f"{base_url.rstrip('/')}{PAIR_CLAIM_PATH}",
+            json=payload,
+            headers={"X-Protocol-Version": str(PROTOCOL_VERSION)},
+            timeout=(CONNECT_TIMEOUT, timeout),
+        )
+    except requests.RequestException as error:
+        raise RemoteError(f"无法连接到主机（{type(error).__name__}）") from error
+    finally:
+        if owned:
+            session.close()
+    if not response.ok:
+        raise RemoteError(_claim_error(response))
+    try:
+        body = response.json()
+    except ValueError as error:
+        raise RemoteError("主机返回的配对结果不是合法 JSON") from error
+    return decode_grant(body)
+
+
+def _claim_error(response: requests.Response) -> str:
+    try:
+        detail = response.json().get("error")
+    except ValueError:
+        detail = None
+    if isinstance(detail, str) and detail:
+        return detail
+    if response.status_code == 404:
+        return "主机版本过旧，不支持配对码，请改用手动粘贴密钥"
+    return f"配对失败（HTTP {response.status_code}）"
+
+
+def decode_grant(payload: object) -> PairingGrant:
+    """Validate a grant. It arrives from another machine like anything else."""
+    if not isinstance(payload, dict):
+        raise RemoteError("主机返回的配对结果格式错误")
+    secret = payload.get("secret")
+    device_id = payload.get("device_id")
+    if not isinstance(secret, str) or len(secret) < MINIMUM_SECRET_CHARACTERS:
+        raise RemoteError("主机返回的密钥无效")
+    if not isinstance(device_id, str) or not device_id:
+        raise RemoteError("主机返回的设备标识无效")
+    if identify(secret) != device_id:
+        # Both ends derive the identifier from the secret; a mismatch means
+        # the reply was assembled by something that is not this host.
+        raise RemoteError("主机返回的设备标识与密钥不匹配")
+    protocol = payload.get("protocol")
+    return PairingGrant(
+        device_id=device_id,
+        secret=secret,
+        label=str(payload.get("label") or ""),
+        host_label=str(payload.get("host_label") or ""),
+        protocol=protocol if isinstance(protocol, int) and not isinstance(protocol, bool) else 0,
+    )

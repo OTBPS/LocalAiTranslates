@@ -290,8 +290,9 @@ def host_service(**kwargs):
     started = []
 
     class FakeRemoteService:
-        def __init__(self, _service, policy, _tasks, *, address, port):
+        def __init__(self, _service, policy, _tasks, *, address, port, on_paired=None):
             self.policy = policy
+            self.on_paired = on_paired
             self.address = address
             self.port = port
             self.stopped = False
@@ -300,6 +301,9 @@ def host_service(**kwargs):
         def start(self):
             self.status = ServiceStatus(ServiceState.RUNNING, self.address, self.port, "ok")
             return self.status
+
+        def set_device_secrets(self, devices):
+            self.device_secrets = tuple((d.device_id, d.secret) for d in devices)
 
         def stop(self):
             self.stopped = True
