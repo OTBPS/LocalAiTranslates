@@ -49,6 +49,9 @@ All notable user-visible changes are recorded here. Versions follow semantic ver
   opaque window instead, with nothing else changed.
 - Every disabled control keeps its reason, and the focus ring no longer shifts a control by a pixel
   when it appears.
+- Scrolling the settings page no longer changes a dropdown or the listen port on the way past. The
+  selection changes by clicking and picking from the list; the list itself still scrolls once it is
+  open, and the page still scrolls when the cursor is over a dropdown.
 - Headings no longer ask for a font weight Chinese fonts do not have, which was making them render
   blurry at 100% scaling.
 - A new application icon: the 译 character on a rounded blue tile. The old mark carried a red

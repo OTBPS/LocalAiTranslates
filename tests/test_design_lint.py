@@ -216,3 +216,32 @@ def test_the_forwarding_shim_is_gone():
     # Kept only while the pages migrated. Leaving it would preserve two
     # names for every control.
     assert not (PACKAGE / "ui_components.py").exists()
+
+
+#: Controls Qt lets the mouse wheel change. They are built in one place
+#: so the refusal cannot be forgotten at a new call site.
+WHEEL_SENSITIVE = {"QComboBox", "QSpinBox", "QDoubleSpinBox", "QSlider"}
+WHEEL_HOME = "widgets/inputs.py"
+
+
+def test_wheel_sensitive_controls_are_built_in_one_place():
+    """Scrolling a page must not change a value under the cursor.
+
+    A bare QComboBox reverts to Qt's default, where a scroll steps the
+    selection — so the language you translate into changes on the way
+    past it, and nothing says so. `widgets.ComboBox` and
+    `widgets.SpinBox` refuse the wheel; this is what stops the next
+    control being added without them.
+    """
+    offenders = []
+    for path in sources():
+        name = relative(path)
+        if name == WHEEL_HOME:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", None) in WHEEL_SENSITIVE:
+                offenders.append(f"{name}:{node.lineno} {node.func.id}()")
+    assert not offenders, (
+        "use widgets.ComboBox / widgets.SpinBox — " + "; ".join(offenders)
+    )

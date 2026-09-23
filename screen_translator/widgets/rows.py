@@ -8,11 +8,12 @@ returning four separate values for the caller to reassemble.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QWidget
 
 from ..design import metrics
 from .buttons import icon_button
 from .fields import Field
+from .inputs import ComboBox
 
 
 class LanguageRow(QWidget):
@@ -32,10 +33,10 @@ class LanguageRow(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(sizes.space_card - 4)
 
-        self.source = QComboBox()
+        self.source = ComboBox()
         for code in source_languages:
             self.source.addItem(names[code], code)
-        self.target = QComboBox()
+        self.target = ComboBox()
         for code in target_languages:
             self.target.addItem(names[code], code)
 

@@ -37,6 +37,9 @@ They were its real gain and survive the change of visual language.)*
   it.
 - Labels are bound to their controls with `setBuddy`, so the label is part
   of the hit area — which is what makes a 36 px input acceptable (ADR 0003).
+- Dropdowns and spin boxes change by clicking or typing, never by
+  scrolling. The page is taller than the window, so the cursor crosses
+  them on the way down; Qt's default would step the value in passing.
 
 ## Cross-device
 

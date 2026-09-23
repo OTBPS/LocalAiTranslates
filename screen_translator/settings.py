@@ -5,7 +5,6 @@ from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
-    QComboBox,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -52,6 +51,7 @@ from .text_translation_page import TextTranslationPage
 from .widgets import (
     AppHeader,
     Card,
+    ComboBox,
     Divider,
     StatusChip,
     ToggleRow,
@@ -125,7 +125,7 @@ class Settings(QWidget):
         language_grid.addWidget(source_label, 0, 0)
         language_grid.addWidget(target_label, 0, 2)
         self.hotkey = QKeySequenceEdit(controller.config.hotkey)
-        self.source_language = QComboBox()
+        self.source_language = ComboBox()
         self.source_language.setAccessibleName("输入语言")
         for code in SOURCE_LANGUAGES:
             self.source_language.addItem(LANGUAGE_NAMES[code], code)
@@ -137,7 +137,7 @@ class Settings(QWidget):
         self.swap_button.setToolTip("对调输入和输出语言")
         self.swap_button.setFixedSize(SIZES.height_icon, SIZES.height_icon)
         self.swap_button.clicked.connect(self.swap_languages)
-        self.target_language = QComboBox()
+        self.target_language = ComboBox()
         self.target_language.setAccessibleName("输出语言")
         for code in TARGET_LANGUAGES:
             self.target_language.addItem(LANGUAGE_NAMES[code], code)
@@ -200,7 +200,7 @@ class Settings(QWidget):
         model_label = QLabel("翻译模型")
         model_label.setObjectName("fieldLabel")
         model_layout.addWidget(model_label)
-        self.translation_model = QComboBox()
+        self.translation_model = ComboBox()
         self.translation_model.setAccessibleName("翻译模型")
         for model_id, model in TRANSLATION_MODELS.items():
             self.translation_model.addItem(model.display_name, model_id)

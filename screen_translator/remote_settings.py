@@ -12,14 +12,12 @@ from collections.abc import Callable
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -36,7 +34,7 @@ from .core import (
 )
 from .design import metrics
 from .remote.access import MINIMUM_SECRET_CHARACTERS, generate_secret
-from .widgets import Card, ToggleRow
+from .widgets import Card, ComboBox, SpinBox, ToggleRow
 
 SIZES = metrics.ACTIVE
 
@@ -68,7 +66,7 @@ class RemoteSettingsCard(QWidget):
         layout.addWidget(card)
 
         card_layout.addWidget(_field_label("模型运行位置"))
-        self.mode = QComboBox()
+        self.mode = ComboBox()
         self.mode.setAccessibleName("模型运行位置")
         for code, label in MODE_LABELS:
             self.mode.addItem(label, code)
@@ -86,7 +84,7 @@ class RemoteSettingsCard(QWidget):
         client_layout.addWidget(_field_label("主机设备"))
         picker_row = QHBoxLayout()
         picker_row.setSpacing(SIZES.space_tight)
-        self.device_picker = QComboBox()
+        self.device_picker = ComboBox()
         self.device_picker.setAccessibleName("主机设备")
         self.device_picker.addItem(MANUAL_DEVICE_LABEL, "")
         self.device_picker.currentIndexChanged.connect(self._device_chosen)
@@ -152,7 +150,7 @@ class RemoteSettingsCard(QWidget):
         self.service_address = QLineEdit()
         self.service_address.setAccessibleName("监听地址")
         self.service_address.setPlaceholderText(AUTO_SERVICE_ADDRESS)
-        self.service_port = QSpinBox()
+        self.service_port = SpinBox()
         self.service_port.setAccessibleName("监听端口")
         self.service_port.setRange(1024, 65535)
         address_grid.addWidget(self.service_address, 1, 0)
