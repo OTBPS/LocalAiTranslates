@@ -67,7 +67,8 @@ Text against every surface it can appear on. AA needs 4.5:1.
 | `radius_small` | 8 | 0 |
 | `radius_pill` | 999 | 0 |
 | `border` | 1 | 2 |
-| `focus_border` | 2 | 3 |
+| `focus_border` | 2 | 2 |
+| `rule` | 1 | 3 |
 | `space_hair` | 1 | 2 |
 | `space_tight` | 8 | 6 |
 | `space_row` | 12 | 7 |

@@ -55,6 +55,7 @@ METRIC_FIELDS = (
     "radius_pill",
     "border",
     "focus_border",
+    "rule",
     "space_hair",
     "space_tight",
     "space_row",

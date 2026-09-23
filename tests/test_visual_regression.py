@@ -1,0 +1,152 @@
+"""Visual regression by colour census, not by pixel diff.
+
+Pixel baselines do not survive travelling between machines: offscreen
+text rendering depends on the installed `msyh.ttc`, the Qt build and the
+ClearType setting, so a baseline produces false failures, gets bypassed,
+and then protects nothing.
+
+Which colours occupy large areas is stable across all of that. Font
+rendering changes how pixels are distributed; it does not invent a colour
+the theme does not contain. So the assertion is: **every dominant colour
+in a rendered window is one the theme declares.** That catches a stray
+literal, an un-themed widget and a wrong state colour, which is most of
+what actually goes wrong.
+"""
+
+from __future__ import annotations
+
+import os
+from collections import Counter
+
+import pytest
+
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
+from PySide6.QtWidgets import QApplication
+
+from screen_translator.design import metrics, semantic, typography
+from screen_translator.design.qss import stylesheet
+from screen_translator.settings import Settings
+
+#: A colour below this share of the window is antialiasing, not design.
+DOMINANT_SHARE = 0.002
+#: Sampling every other pixel is four times faster and does not change
+#: which colours are dominant.
+STEP = 2
+
+
+@pytest.fixture(scope="module")
+def qt_app():
+    app = QApplication.instance() or QApplication([])
+    app.setStyle("Fusion")
+    return app
+
+
+def census(image) -> dict[str, float]:
+    counts: Counter[str] = Counter()
+    for y in range(0, image.height(), STEP):
+        for x in range(0, image.width(), STEP):
+            colour = image.pixelColor(x, y)
+            counts[f"#{colour.red():02X}{colour.green():02X}{colour.blue():02X}"] += 1
+    total = sum(counts.values()) or 1
+    return {
+        colour: count / total
+        for colour, count in counts.items()
+        if count / total >= DOMINANT_SHARE
+    }
+
+
+def window(qt_app, theme, sizes, tmp_path):
+    from scripts.render_ui_preview import PreviewController
+
+    qt_app.setStyleSheet(stylesheet(theme, sizes, typography.ACTIVE))
+    view = Settings(PreviewController(tmp_path))
+    view.resize(820, 840)
+    return view
+
+
+SCENES = [
+    pytest.param(820, 840, 0, id="capture-default"),
+    pytest.param(820, 840, 1, id="text-default"),
+    pytest.param(820, 840, 2, id="system-default"),
+    # The declared minimum. Everything has to fit or scroll, and nothing
+    # new may appear in the palette because a card got narrower.
+    pytest.param(680, 600, 2, id="system-minimum"),
+]
+
+
+@pytest.mark.parametrize(("width", "height", "tab"), SCENES)
+def test_every_dominant_colour_belongs_to_the_theme(qt_app, tmp_path, width, height, tab):
+    theme = semantic.ACTIVE
+    view = window(qt_app, theme, metrics.ACTIVE, tmp_path)
+    try:
+        view.resize(width, height)
+        view.tabs.setCurrentIndex(tab)
+        qt_app.processEvents()
+
+        found = census(view.grab().toImage())
+        declared = {value.upper() for value in theme.values()}
+        strays = {
+            colour: round(share * 100, 3)
+            for colour, share in found.items()
+            if colour not in declared
+        }
+
+        assert not strays, f"colours no theme declares: {strays}"
+    finally:
+        view.close()
+
+
+def test_the_census_would_notice_a_stray_colour(qt_app, tmp_path):
+    """The test above is only worth having if it can fail."""
+    view = window(qt_app, semantic.ACTIVE, metrics.ACTIVE, tmp_path)
+    try:
+        view.setStyleSheet("QWidget { background: #FF00FF; }")
+        qt_app.processEvents()
+
+        found = census(view.grab().toImage())
+
+        assert "#FF00FF" in found
+        assert "#FF00FF" not in {value.upper() for value in semantic.ACTIVE.values()}
+    finally:
+        view.close()
+        qt_app.setStyleSheet(stylesheet(semantic.ACTIVE, metrics.ACTIVE, typography.ACTIVE))
+
+
+@pytest.mark.parametrize(("width", "height", "tab"), SCENES)
+def test_nothing_overflows_the_window(qt_app, tmp_path, width, height, tab):
+    """Structural check: the minimum size has to hold or scroll."""
+    view = window(qt_app, semantic.ACTIVE, metrics.ACTIVE, tmp_path)
+    try:
+        view.resize(width, height)
+        view.tabs.setCurrentIndex(tab)
+        qt_app.processEvents()
+
+        # A horizontal scrollbar means something is genuinely too wide;
+        # vertical scrolling is the declared reflow strategy.
+        assert view.scroll.horizontalScrollBar().maximum() == 0
+        for child in view.findChildren(type(view.tabs)):
+            assert child.width() <= width, f"{child.objectName()} is wider than the window"
+    finally:
+        view.close()
+
+
+def test_every_focusable_control_has_an_accessible_name(qt_app, tmp_path):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QComboBox, QLineEdit, QPushButton
+
+    view = window(qt_app, semantic.ACTIVE, metrics.ACTIVE, tmp_path)
+    try:
+        missing = []
+        for kind in (QPushButton, QComboBox, QLineEdit):
+            for widget in view.findChildren(kind):
+                if widget.focusPolicy() == Qt.FocusPolicy.NoFocus:
+                    continue
+                # A button's own label is its name; anything else needs
+                # one set, or a screen reader announces nothing.
+                label = widget.accessibleName() or getattr(widget, "text", lambda: "")()
+                if not label:
+                    missing.append(f"{kind.__name__}#{widget.objectName()}")
+        assert not missing, missing
+    finally:
+        view.close()

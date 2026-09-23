@@ -59,7 +59,7 @@ def stylesheet(theme: Theme, metrics: Metrics, fonts: Typography) -> str:
         }}
         QFrame#footerBar {{
             background: {card.fill};
-            border-top: {metrics.focus_border}px solid {theme.stroke_separator};
+            border-top: {metrics.rule}px solid {theme.stroke_separator};
         }}
         QFrame#divider {{
             background: {theme.stroke_separator};

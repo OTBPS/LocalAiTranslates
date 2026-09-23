@@ -37,8 +37,14 @@ class Metrics:
     radius_pill: int
 
     border: int
-    #: Declared in the resting state too, so :focus only changes colour.
+    #: Declared in the resting state too, so `:focus` only changes the
+    #: colour. Equal to `border` on purpose: that is what keeps focus
+    #: from shifting the layout.
     focus_border: int
+    #: Structural rules -- a footer edge, a section divider -- which are
+    #: heavier than a control border in the flat direction and lighter in
+    #: the rounded one.
+    rule: int
 
     space_hair: int
     space_tight: int
@@ -65,7 +71,8 @@ FLAT = Metrics(
     radius_small=0,
     radius_pill=0,
     border=2,
-    focus_border=3,
+    focus_border=2,
+    rule=3,
     space_hair=2,
     space_tight=6,
     space_row=7,
@@ -92,6 +99,7 @@ ROUNDED = Metrics(
     border=1,
     #: Still 2, and declared at rest: :focus must never change geometry.
     focus_border=2,
+    rule=1,
     space_hair=1,
     space_tight=8,
     space_row=12,

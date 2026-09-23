@@ -3,13 +3,14 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
-from PySide6.QtGui import QFont, QFontDatabase
+from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication
 
+from . import design
 from .core import local_dir
 from .instance import InstanceCoordinator
 from .settings import Settings
-from .theme import application_stylesheet, create_app_icon
+from .theme import create_app_icon
 from .version import __version__
 
 
@@ -34,12 +35,13 @@ def main():
             )
             return 1
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
     font_path = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "msyh.ttc"
     if font_path.exists():
         QFontDatabase.addApplicationFont(str(font_path))
-    app.setFont(QFont("Microsoft YaHei UI", 10))
-    app.setStyleSheet(application_stylesheet())
+    # Style, palette, font and stylesheet in one call. They used to be
+    # four independent lines, which is how the font ended up declared
+    # both here and in the stylesheet, free to disagree.
+    design.apply(app)
     app.setWindowIcon(create_app_icon())
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("ScreenTranslator")
