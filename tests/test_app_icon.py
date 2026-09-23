@@ -124,3 +124,21 @@ def test_the_generator_takes_its_colours_from_the_design_package():
     # previous one outlived the direction it was drawn for.
     assert "from screen_translator.design.primitives import" in source
     assert not re.search(r'"#[0-9A-Fa-f]{6}"', source)
+
+
+@pytest.mark.parametrize(
+    "script", ("build.ps1", "build_client.ps1", "build_update.ps1")
+)
+def test_the_release_build_never_reuses_a_cached_executable(script):
+    """A regenerated icon at the same path does not invalidate the cache.
+
+    PyInstaller's staleness check for the EXE stage compares paths, not
+    contents. Without --clean, changing the icon updates the payload
+    beside the exe and leaves the icon embedded *in* the exe as it was,
+    so Explorer and the taskbar keep drawing the old one. Found by
+    reading the exe's RT_ICON resources after a rebuild appeared to
+    succeed.
+    """
+    source = (ROOT / "scripts" / script).read_text(encoding="utf-8")
+
+    assert "-m PyInstaller --noconfirm --clean" in source

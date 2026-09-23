@@ -52,6 +52,7 @@
 - 三种底色（浅任务栏 `#F3F3F3`、深任务栏 `#202020`、中间调壁纸 `#6E7A86`）× 五个小尺寸目视全部可辨，产物 `artifacts/ui/app-icon-v080-contexts.png`、`app-icon-v080-sizes.png`。
 - 颜色从 `design.primitives` 导入，测试断言生成脚本里没有色值字面量——旧图标正是因为写死了四个色值，才比它所属的设计方向多活了两个版本。
 - **修掉一处文档与代码不符**：v0.5.1 的发布说明写了"安装或更新后通知 Explorer"，但没有任何 iss 脚本包含该调用。新增共享的 `installer.shell.iss`（`SHChangeNotify` + `SHCNE_ASSOCCHANGED`），完整版 / 客户端 / 增量三个脚本都在 `ssPostInstall` 调用，并加了断言。三个版本没被发现，是因为图标一直没变过。
+- **PyInstaller 会复用缓存的 exe**：它对 EXE 阶段的陈旧判断比的是路径不是内容，所以同路径重新生成 ICO 之后，exe 旁边的 assets 更新了，**烤进 exe 里的图标没更新**——重新打包会报成功并装上旧图标。三个构建脚本已加 `--clean`，并有断言。这个只能靠直接读 exe 的 RT_ICON 资源才看得见：`ExtractAssociatedIcon` 走 shell，返回的是缓存里那份，会跟着一起错。
 - `ISCC.exe` 实编译 `installer.update.iss` 与 `installer.client.iss`（后者 include 完整版脚本）均 exit 0，产出 43,389,774 / 106,775,978 字节的真实安装包。第一次编译**失败**并被抓到：`installer.shell.iss` 的头部注释用了 `;`，那在 `[Code]` 段里不是注释而是空语句。已改为 `//`。
 
 ### 仍待真机目视确认

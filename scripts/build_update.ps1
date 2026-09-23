@@ -30,7 +30,12 @@ try {
     $AppFileVersion = "$AppVersion.0"
 
     if (-not $SkipAppBuild) {
-        & $Python -m PyInstaller --noconfirm ScreenTranslator.spec
+        # --clean is not optional for a release build. PyInstaller's
+        # staleness check for the EXE stage compares paths, not
+        # contents, so a regenerated icon at the same path is reused
+        # from the work directory: the payload updates and the icon
+        # embedded in the exe does not. Found exactly that way.
+        & $Python -m PyInstaller --noconfirm --clean ScreenTranslator.spec
         if ($LASTEXITCODE) { throw 'PyInstaller failed' }
     }
 

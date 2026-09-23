@@ -68,3 +68,11 @@ literal.
   asserts both top-level scripts include it and call it at `ssPostInstall`.
   The claim went unnoticed for three releases because nothing about the
   icon had changed since it was written.
+- **PyInstaller reuses a cached executable when only the icon changed.**
+  Its staleness check for the EXE stage compares paths, not contents, so
+  regenerating the ICO at the same path updates the payload beside the exe
+  and leaves the icon embedded *in* the exe as it was. A rebuild reports
+  success and ships the old mark. The three build scripts now pass
+  `--clean`, and a test asserts it. Reading the exe's RT_ICON resources is
+  the only way to see this: `ExtractAssociatedIcon` goes through the shell
+  and returns the cached answer, so it agrees with whatever is wrong.
