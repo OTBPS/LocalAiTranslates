@@ -76,6 +76,7 @@ def build(port=None, runner=None, **overrides):
         busy=False,
         detected_source_language=None,
         translator=port,
+        backend=SimpleNamespace(ready=lambda: True, describe=lambda: "本地模型就绪"),
         manual=manual,
         inference=arbiter,
         set_language_pair=Mock(return_value=True),

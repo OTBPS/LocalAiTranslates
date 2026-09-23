@@ -79,6 +79,9 @@ class Hotkey(QAbstractNativeEventFilter):
         return False, 0
 
 
+AUTOSTART_FLAG = "--autostart"
+
+
 def set_startup(enabled):
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as key:
         if enabled:
@@ -89,6 +92,10 @@ def set_startup(enabled):
                 if getattr(sys, "frozen", False)
                 else [sys.executable, "-m", "screen_translator.app"]
             )
+            # Say why the process is starting instead of leaving it to be
+            # inferred: a login launch must stay in the tray even when the
+            # installation is not usable yet.
+            args.append(AUTOSTART_FLAG)
             winreg.SetValueEx(key, "ScreenTranslator", 0, winreg.REG_SZ, subprocess.list2cmdline(args))
         else:
             try:

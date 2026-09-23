@@ -21,6 +21,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 from screen_translator.config_store import ConfigStore
 from screen_translator.controller import Controller
 from screen_translator.core import Config
+from screen_translator.onboarding import StartupIntent
 from screen_translator.tasks import TaskRunner
 
 
@@ -97,7 +98,7 @@ def controller(tmp_path, monkeypatch):
         backend_factory=lambda _config: backend,
         hotkey_factory=FakeHotkeys,
         task_runner=TaskRunner(),
-        show_settings_when_models_missing=False,
+        intent=StartupIntent.AUTOSTART,
     )
     yield subject, backend, store
     if not backend.stopped:
@@ -126,7 +127,7 @@ def test_the_real_settings_window_can_be_built_during_startup(tmp_path, monkeypa
         backend_factory=lambda _config: backend,
         hotkey_factory=FakeHotkeys,
         task_runner=TaskRunner(),
-        show_settings_when_models_missing=False,
+        intent=StartupIntent.AUTOSTART,
     )
     try:
         subject.settings.refresh()

@@ -49,7 +49,7 @@ from .remote_settings import (
 )
 from .text_translation_page import TextTranslationPage
 from .theme import UI_COLORS, asset_path
-from .ui_components import ConstructivistHero, ToggleRow, make_card
+from .ui_components import ConstructivistHero, ToggleRow, make_card, set_enabled_with_reason
 
 
 class Settings(QWidget):
@@ -393,24 +393,8 @@ class Settings(QWidget):
         return divider
 
     def set_enabled_with_reason(self, widget, enabled, reason=""):
-        """Enable or disable a control, and say why when it is unavailable.
-
-        Keeping the two together in one call is what stops them drifting
-        apart, which is how the window ended up full of greyed-out controls
-        that explained nothing.
-        """
-        widget.setEnabled(enabled)
-        if not enabled:
-            # Remember the control's own tooltip once, the first time we
-            # replace it, so the explanation can be handed back later.
-            if not hasattr(widget, "_enabled_tooltip"):
-                widget._enabled_tooltip = widget.toolTip()
-            widget.setToolTip(reason)
-        elif hasattr(widget, "_enabled_tooltip"):
-            # Only restore what we took. Clearing unconditionally would wipe
-            # the tooltips of controls that were never disabled.
-            widget.setToolTip(widget._enabled_tooltip)
-            del widget._enabled_tooltip
+        """See `ui_components.set_enabled_with_reason`; the text page shares it."""
+        set_enabled_with_reason(widget, enabled, reason)
 
     def set_status_chip(self, label, text, tone="neutral"):
         palette = {

@@ -207,3 +207,24 @@ class ToggleRow(QWidget):
         if subtitle:
             self.switch.setToolTip(subtitle)
         row.addWidget(self.switch, 0, Qt.AlignmentFlag.AlignVCenter)
+
+
+def set_enabled_with_reason(widget, enabled, reason=""):
+    """Enable or disable a control, and say why when it is unavailable.
+
+    Keeping the two together in one call is what stops them drifting
+    apart, which is how the window ended up full of greyed-out controls
+    that explained nothing.
+    """
+    widget.setEnabled(enabled)
+    if not enabled:
+        # Remember the control's own tooltip once, the first time we
+        # replace it, so the explanation can be handed back later.
+        if not hasattr(widget, "_enabled_tooltip"):
+            widget._enabled_tooltip = widget.toolTip()
+        widget.setToolTip(reason)
+    elif hasattr(widget, "_enabled_tooltip"):
+        # Only restore what we took. Clearing unconditionally would wipe
+        # the tooltips of controls that were never disabled.
+        widget.setToolTip(widget._enabled_tooltip)
+        del widget._enabled_tooltip

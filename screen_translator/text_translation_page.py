@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 from .core import LANGUAGE_NAMES, SOURCE_LANGUAGES, TARGET_LANGUAGES, swap_language_pair
 from .models import get_translation_model
 from .theme import asset_path
-from .ui_components import make_card, make_language_row
+from .ui_components import make_card, make_language_row, set_enabled_with_reason
 
 READY_STATUS = "就绪"
 TRANSLATING_STATUS = "正在翻译…"
@@ -150,7 +150,15 @@ class TextTranslationPage(QWidget):
         return f"{name} · {self.c.translator.mode}"
 
     def refresh(self):
-        capture_busy = bool(self.c.occupancy().busy)
+        occupancy = self.c.occupancy()
+        capture_busy = bool(occupancy.busy)
+        # Without this gate, pressing Translate with no weights on disk ran
+        # the engine far enough to fail, and the failure it produced was an
+        # absolute model path -- a file name shown to the user as an
+        # explanation.
+        ready = self.c.backend.ready()
+        blocked = capture_busy or not ready
+        reason = occupancy.reason if capture_busy else ("" if ready else self.c.backend.describe())
         has_input = bool(self.source_text.toPlainText().strip())
         self.source_language.setEnabled(not capture_busy and not self._running)
         self.target_language.setEnabled(not capture_busy and not self._running)
@@ -161,11 +169,13 @@ class TextTranslationPage(QWidget):
         )
         self.swap_button.setEnabled(bool(pair) and not capture_busy and not self._running)
         self.source_text.setReadOnly(self._running)
-        self.translate_button.setEnabled(has_input and not capture_busy and not self._running)
+        set_enabled_with_reason(
+            self.translate_button, has_input and not blocked and not self._running, reason
+        )
         self.cancel_button.setEnabled(self._running)
         self.copy_button.setEnabled(bool(self.target_text.toPlainText()))
         self.clear_button.setEnabled(not self._running and bool(has_input or self.target_text.toPlainText()))
-        self.status.setText(f"{self.model_status()} · {self._message}")
+        self.status.setText(f"{self.model_status()} · {self._message or reason or '就绪'}")
 
     def set_message(self, message: str) -> None:
         self._message = message

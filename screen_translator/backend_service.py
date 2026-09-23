@@ -37,7 +37,12 @@ READINESS_INTERVAL_MS = 15000
 class BackendService(QObject):
     """Owns the current backend and the background work that maintains it."""
 
+    #: A different backend is now in place.
     changed = Signal()
+    #: The current backend became usable, or stopped being usable. Emitted
+    #: from `poll`, which runs on the UI thread; the refresh that produced
+    #: the new answer does not.
+    ready_changed = Signal(bool)
 
     def __init__(
         self,
@@ -62,6 +67,7 @@ class BackendService(QObject):
         self._timer: QTimer | None = None
         self.warmed = False
         self.backend = factory(self._config())
+        self._was_ready = self.ready()
 
     # -- what the rest of the application reads --------------------------
 
@@ -126,6 +132,13 @@ class BackendService(QObject):
         """
         self.refresh_readiness()
         self.warm_up()
+        self._announce_readiness()
+
+    def _announce_readiness(self) -> None:
+        ready = self.ready()
+        if ready != self._was_ready:
+            self._was_ready = ready
+            self.ready_changed.emit(ready)
 
     def refresh_readiness(self) -> None:
         if self._readiness_token:
@@ -209,4 +222,5 @@ class BackendService(QObject):
         previous.stop()
         self.changed.emit()
         self.warm_up()
+        self._announce_readiness()
         return True

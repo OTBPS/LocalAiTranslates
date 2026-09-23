@@ -17,12 +17,14 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from .backend import Backend, create_backend
 from .backend_service import BackendService
+from .capabilities import local_runtime_available
 from .capture.session_controller import CaptureController
 from .config_store import ConfigStore
 from .contracts import OcrPort, RendererPort, TranslationPort
 from .core import Config
 from .downloads import DownloadCoordinator
 from .feedback import (
+    Lifetime,
     Notice,
     NoticeAction,
     NoticeCenter,
@@ -38,6 +40,7 @@ from .languages import LanguageService
 from .logging_setup import configure_logging
 from .manual_translation import ManualTranslationController
 from .navigation import Destination
+from .onboarding import OnboardingPlan, StartupIntent, evaluate
 from .overlay import Overlay
 from .remote.host import HostService
 from .remote.service import ServiceState
@@ -59,7 +62,10 @@ class Controller(QObject):
         # system-wide shortcut, which fails when another copy holds it.
         hotkey_factory: Callable[..., HotkeyService] = HotkeyService,
         task_runner: TaskRunner | None = None,
-        show_settings_when_models_missing: bool = True,
+        # Why the process started, which decides whether a first-run
+        # problem is allowed to open a window. Guessing it from "are the
+        # models ready" opened one at every login on an unset-up machine.
+        intent: StartupIntent = StartupIntent.LAUNCH,
     ):
         super().__init__()
         self.app = app
@@ -100,6 +106,12 @@ class Controller(QObject):
             parent=self,
         )
         self.backends.changed.connect(self.apply_host_service)
+        # A host that came back, or weights that finished downloading, has
+        # to retract the sticky first-run message by itself. Never opens a
+        # window: the user is in the middle of something else.
+        self.backends.ready_changed.connect(
+            lambda _ready: self.review_onboarding(may_open=False)
+        )
         self.languages.source_changed.connect(self.backends.reset_warmup)
         self.languages.source_changed.connect(self.backends.warm_up)
         self.languages.changed.connect(self.refresh_language_actions)
@@ -168,9 +180,8 @@ class Controller(QObject):
         self.refresh_language_actions()
         self.backends.start()
         self.apply_host_service()
-        if show_settings_when_models_missing and not self.backend.ready():
-            QTimer.singleShot(0, self.show_settings)
-        elif self.backend.ready():
+        QTimer.singleShot(0, lambda: self.review_onboarding(intent))
+        if self.backend.ready():
             QTimer.singleShot(1000, self.backends.warm_up)
 
     @property
@@ -368,6 +379,49 @@ class Controller(QObject):
         # Long enough for the window to actually leave the screen before it
         # is frozen into the screenshot.
         QTimer.singleShot(120, self.captures.begin)
+
+    def review_onboarding(
+        self, intent: StartupIntent = StartupIntent.LAUNCH, *, may_open: bool = True
+    ) -> OnboardingPlan:
+        """Say what is still missing, and offer the control that fixes it.
+
+        The old version was a tray balloon plus a window opened on
+        whichever tab it happened to be showing -- and the balloon is the
+        one surface Windows is free to suppress.
+        """
+        plan = evaluate(
+            self.config,
+            backend_ready=self.backend.ready(),
+            local_runtime=local_runtime_available(),
+            intent=intent,
+        )
+        if not plan.blocking:
+            self.notices.revoke("onboarding")
+            if not self.config.onboarding_completed:
+                self.configuration.update(onboarding_completed=True)
+            return plan
+        self.notices.post(
+            Notice(
+                "onboarding",
+                Severity.WARNING,
+                plan.title,
+                detail=plan.detail,
+                context="settings",
+                lifetime=Lifetime.STICKY,
+                actions=(
+                    NoticeAction(
+                        "fix-onboarding",
+                        plan.action_label,
+                        plan.destination,
+                        primary=True,
+                    ),
+                ),
+            )
+        )
+        if may_open and plan.open_settings:
+            self.show_settings()
+            self.settings.navigate(plan.destination)
+        return plan
 
     def on_capture_failed(self, message: str) -> None:
         """Report a capture failure somewhere it cannot be silenced.

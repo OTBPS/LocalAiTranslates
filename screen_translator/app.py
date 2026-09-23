@@ -49,8 +49,9 @@ def main():
     if not coordinator.acquire_or_notify(command):
         return 0
     from .controller import Controller
+    from .onboarding import intent_from_arguments
 
-    controller = Controller(app, Settings, show_settings_when_models_missing=False)
+    controller = Controller(app, Settings, intent=intent_from_arguments(sys.argv))
     coordinator.command_received.connect(
         lambda received: controller.activate_settings() if received == "show-settings" else None
     )

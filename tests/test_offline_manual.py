@@ -87,6 +87,7 @@ def test_segmentation_and_the_page_never_touch_the_network(offline):
             occupancy=lambda: Occupancy(),
             detected_source_language=None,
             translator=port,
+            backend=SimpleNamespace(ready=lambda: True, describe=lambda: "本地模型就绪"),
             manual=manual,
             inference=arbiter,
             set_language_pair=lambda *_args: True,
