@@ -11,6 +11,7 @@ from PySide6.QtGui import QImage
 
 from screen_translator.controller import Controller
 from screen_translator.core import CancellationToken, Config, OcrLine, OcrResult, TranslatedBlock
+from screen_translator.feedback import Occupancy
 from screen_translator.inference import MANUAL, InferenceBusy, InferenceCoordinator
 from screen_translator.session import CaptureSession, SessionState
 
@@ -25,10 +26,12 @@ def test_toggle_cancels_a_running_manual_translation_before_capturing(monkeypatc
         busy=False,
         download_token=None,
         config=Config(),
-        backend=SimpleNamespace(ready=lambda: True),
+        backend=SimpleNamespace(ready=lambda: True, kind="local"),
         inference=arbiter,
         settings=Mock(),
         tray=Mock(),
+        notices=Mock(),
+        occupancy=lambda: Occupancy(),
         begin=Mock(),
     )
 

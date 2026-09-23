@@ -38,6 +38,7 @@ def state(factory, backend):
         manual=Mock(),
         tasks=Mock(start=Mock()),
         tray=Mock(),
+        notices=Mock(),
         settings=Mock(),
         host_service=Mock(apply=Mock(return_value=SimpleNamespace(state="stopped", detail=""))),
         apply_host_service=Mock(),
@@ -70,8 +71,11 @@ def test_a_failed_switch_keeps_the_working_backend_alive():
 
     assert context.backend is previous
     assert previous.stopped is False, "a closed session cannot be reused"
-    context.tray.showMessage.assert_called_once()
-    assert "远程模式需要填写主机地址" in context.tray.showMessage.call_args.args[1]
+    context.notices.post.assert_called_once()
+    notice = context.notices.post.call_args.args[0]
+    assert "远程模式需要填写主机地址" in notice.detail
+    # The message says where to fix it, rather than only what broke.
+    assert notice.actionable
     context.apply_host_service.assert_not_called()
 
 

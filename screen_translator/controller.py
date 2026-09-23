@@ -22,11 +22,21 @@ from .core import (
     merge_lines,
     swap_language_pair,
 )
+from .feedback import (
+    Notice,
+    NoticeAction,
+    NoticeCenter,
+    Occupancy,
+    Severity,
+    error_notice,
+)
+from .feedback.sinks import TraySink
 from .graphics import OverlayRenderer, ScreenShot, capture_region, to_array
 from .hotkeys import HotkeyService
 from .inference import CAPTURE, InferenceCoordinator
 from .logging_setup import configure_logging
 from .manual_translation import ManualTranslationController
+from .navigation import Destination
 from .overlay import Overlay
 from .remote.host import HostService
 from .remote.service import ServiceState
@@ -111,11 +121,35 @@ class Controller(QObject):
         )
         self.tray.show()
 
+        # One entry point for everything the application says. Surfaces
+        # register themselves; callers describe the message, not its shape.
+        self.notices = NoticeCenter(self)
+        self.notices.register_sink(TraySink(self.tray))
+        register_banner = getattr(self.settings, "register_notice_sinks", None)
+        if register_banner is not None:
+            register_banner(self.notices)
+        self.notices.action_invoked.connect(self.on_notice_action)
+
         self.hotkey = hotkey_factory(app, self.toggle)
         try:
             self.hotkey.apply(self.config.hotkey)
         except ValueError as error:
-            self.tray.showMessage("快捷键不可用", str(error))
+            self.notices.post(
+                error_notice(
+                    "hotkey-unavailable",
+                    "快捷键不可用",
+                    detail=str(error),
+                    context="settings",
+                    actions=(
+                        NoticeAction(
+                            "open-hotkey",
+                            "更改快捷键",
+                            Destination.SYSTEM_HOTKEY,
+                            primary=True,
+                        ),
+                    ),
+                )
+            )
 
         self.configuration.changed.connect(self.on_configuration_changed)
         self.events.progress.connect(self.progress)
@@ -182,7 +216,19 @@ class Controller(QObject):
             # that could not be built; a remote backend in particular cannot
             # be reused once its session is closed.
             LOGGER.warning("Backend selection failed: %s", type(error).__name__)
-            self.tray.showMessage("后端不可用", str(error))
+            self.notices.post(
+                error_notice(
+                    "backend-unavailable",
+                    "后端不可用",
+                    detail=str(error),
+                    context="settings",
+                    actions=(
+                        NoticeAction(
+                            "open-remote", "检查跨设备设置", Destination.REMOTE_MODE, primary=True
+                        ),
+                    ),
+                )
+            )
             return
         previous, self.backend = self.backend, replacement
         previous.stop()
@@ -193,7 +239,21 @@ class Controller(QObject):
         """Reconcile the listener with the current configuration."""
         status = self.host_service.apply(self.config)
         if status.state == ServiceState.FAILED:
-            self.tray.showMessage("远程服务未启动", status.detail)
+            self.notices.post(
+                error_notice(
+                    "host-service-failed",
+                    "远程服务未启动",
+                    detail=status.detail,
+                    context="remote",
+                    actions=(
+                        NoticeAction(
+                            "open-host", "检查主机设置", Destination.HOST_SERVICE, primary=True
+                        ),
+                    ),
+                )
+            )
+        else:
+            self.notices.revoke("host-service-failed")
         self.settings.refresh()
 
     def on_readiness_tick(self) -> None:
@@ -304,7 +364,20 @@ class Controller(QObject):
             self.detected_source_language,
         )
         if not pair:
-            self.tray.showMessage("无法对调语言", "自动识别需先完成一次识别，且输入输出语言不能相同")
+            self.notices.post(
+                Notice(
+                    "language-swap-unavailable",
+                    Severity.WARNING,
+                    "无法对调语言",
+                    detail="自动识别需先完成一次识别，且输入输出语言不能相同",
+                    context="settings",
+                    actions=(
+                        NoticeAction(
+                            "open-languages", "选择语言", Destination.CAPTURE_LANGUAGES
+                        ),
+                    ),
+                )
+            )
             return
         # No `settings.load_config()` here: reloading the whole form to keep
         # one pair of combo boxes in sync silently discarded every unsaved
@@ -342,6 +415,44 @@ class Controller(QObject):
         if show_languages is not None:
             show_languages(config.source_language, config.target_language)
 
+    def on_notice_action(self, notice_id: str, action_id: str) -> None:
+        """Do what the message offered.
+
+        An action either names a place to go or a command to run; both mean
+        the user can resolve the problem from where they read about it
+        instead of being told to go and look for the control.
+        """
+        commands = {"retry-capture": self.toggle}
+        for notice in (*self.notices.active(), *self.notices.history()):
+            if notice.notice_id != notice_id:
+                continue
+            for action in notice.actions:
+                if action.action_id != action_id:
+                    continue
+                self.notices.revoke(notice_id)
+                if action.destination is not None:
+                    self.show_settings()
+                    navigate = getattr(self.settings, "navigate", None)
+                    if navigate is not None:
+                        navigate(action.destination)
+                    return
+                command = commands.get(action_id)
+                if command is not None:
+                    command()
+                return
+
+    def occupancy(self):
+        """Why interactive actions are unavailable, in words a control can show.
+
+        One predicate for every ``setEnabled`` decision, so that disabling a
+        control and explaining the reason cannot drift apart.
+        """
+        if self.busy:
+            return Occupancy(True, "截图翻译正在进行")
+        if self.download_token:
+            return Occupancy(True, "正在下载模型")
+        return Occupancy()
+
     def show_result_language_menu(self, parent, position) -> None:
         menu = QMenu(parent)
         current = menu.addAction(self.language_pair_text())
@@ -367,12 +478,38 @@ class Controller(QObject):
         if self.overlays:
             self.cancel()
             return
-        if self.busy or self.download_token:
-            self.tray.showMessage("正在处理", "请等待当前任务结束")
+        occupancy = self.occupancy()
+        if occupancy.busy:
+            self.notices.post(
+                Notice(
+                    "capture-busy",
+                    Severity.INFO,
+                    "正在处理",
+                    detail=f"{occupancy.reason}，请等待当前任务结束",
+                    context="capture",
+                )
+            )
             return
         if not self.backend.ready():
-            self.tray.showMessage("无法截图翻译", self.backend.describe())
+            # Land on the control that fixes it rather than on whichever tab
+            # the window happened to be showing.
+            destination = (
+                Destination.REMOTE_PAIRING
+                if self.backend.kind == "remote"
+                else Destination.MODEL_DOWNLOAD
+            )
+            label = "检查主机连接" if self.backend.kind == "remote" else "下载模型"
+            self.notices.post(
+                error_notice(
+                    "backend-not-ready",
+                    "无法截图翻译",
+                    detail=self.backend.describe(),
+                    context="capture",
+                    actions=(NoticeAction("fix-backend", label, destination, primary=True),),
+                )
+            )
             self.show_settings()
+            self.settings.navigate(destination)
             return
         self.inference.cancel_preemptable()
         self.settings.hide()
@@ -424,7 +561,15 @@ class Controller(QObject):
     def selected(self) -> None:
         if not self.selection or self.selection.width() < 12 or self.selection.height() < 12:
             self.cancel()
-            self.tray.showMessage("选区太小", "请重新框选文字区域")
+            self.notices.post(
+                Notice(
+                    "selection-too-small",
+                    Severity.WARNING,
+                    "选区太小",
+                    detail="请重新框选文字区域，至少 12 × 12",
+                    context="capture",
+                )
+            )
             return
         self.capture = capture_region(self.screens, self.selection)
         self.session.transition(SessionState.PROCESSING)
@@ -536,7 +681,19 @@ class Controller(QObject):
         # The worker has already finished by the time this signal is handled.
         self.session.finish_cancel()
         self.refresh_language_actions()
-        self.tray.showMessage("截屏翻译", message)
+        # Sticky, and offering the retry directly. A capture failure used to
+        # go out as a tray balloon after the overlay and the selection had
+        # already been destroyed, so a user whose notification settings
+        # suppress balloons lost both the result and any trace of the error.
+        self.notices.post(
+            error_notice(
+                "capture-failed",
+                "截屏翻译失败",
+                detail=message,
+                context="capture",
+                actions=(NoticeAction("retry-capture", "重新截图", primary=True),),
+            )
+        )
 
     def cancel(self) -> None:
         previous_state = self.session.state

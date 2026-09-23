@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication
 
 from screen_translator.config_store import ConfigStore
 from screen_translator.core import Config
+from screen_translator.feedback import Occupancy
 from screen_translator.native import hotkey_parts
 from screen_translator.settings import Settings
 
@@ -57,6 +58,7 @@ def controller(tmp_path, **overrides):
         ocr=SimpleNamespace(mode="未加载"),
         translator=SimpleNamespace(mode="未加载", stop=Mock()),
         backend=SimpleNamespace(kind="local", ready=lambda: True, describe=lambda: "本地模型就绪"),
+        occupancy=lambda: Occupancy(),
         host_service=SimpleNamespace(status=SimpleNamespace(describe=lambda: "远程服务未启用")),
         hotkey=FakeHotkeys(),
         language_pair_text=lambda: "自动识别 → 简体中文",
@@ -90,10 +92,7 @@ def test_a_failure_while_saving_restores_the_previous_shortcut(monkeypatch, tmp_
             "screen_translator.settings.set_startup", lambda _enabled: None
         )
         warned = []
-        monkeypatch.setattr(
-            "screen_translator.settings.QMessageBox.warning",
-            lambda *args, **_kwargs: warned.append(args[-1]),
-        )
+        monkeypatch.setattr(settings, "notify", lambda notice: warned.append(notice))
         # Fail while persisting, i.e. after the point where the old code had
         # already rebound the variable the rollback depended on.
         monkeypatch.setattr(
@@ -107,7 +106,9 @@ def test_a_failure_while_saving_restores_the_previous_shortcut(monkeypatch, tmp_
         # the rollback ran without raising anything of its own.
         assert state.hotkey.current == "Ctrl+Alt+T"
         assert state.hotkey.applied == ["Ctrl+Alt+J", "Ctrl+Alt+T"]
-        assert warned and "disk full" in warned[0]
+        # Reported as a notice, not a modal the user has to dismiss to read.
+        assert warned and "disk full" in warned[0].detail
+        assert warned[0].persistent, "an error the user must act on cannot expire"
     finally:
         settings.close()
 

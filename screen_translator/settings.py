@@ -33,6 +33,8 @@ from .core import (
     Cancelled,
     swap_language_pair,
 )
+from .feedback import Notice, Severity, error_notice, success_notice
+from .feedback.sinks import BannerSink, NoticeBanner
 from .models import (
     TRANSLATION_MODELS,
     get_translation_model,
@@ -41,6 +43,7 @@ from .models import (
     models_ready,
 )
 from .native import set_startup
+from .navigation import Destination
 from .remote_settings import (
     RemoteSettingsCard,
     runtime_fields_changed,
@@ -90,6 +93,13 @@ class Settings(QWidget):
         hero_layout.addWidget(title)
         hero_layout.addStretch()
         layout.addWidget(hero)
+
+        # Above the tabs on purpose: the save button lives in the shared
+        # footer, so its confirmation has to be visible from every tab. The
+        # old status label sat inside the model card and was therefore
+        # invisible on two of the three pages.
+        self.banner = NoticeBanner()
+        layout.addWidget(self.banner)
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
@@ -141,6 +151,7 @@ class Settings(QWidget):
         capture_layout.addWidget(language_card)
 
         status_card, status_card_layout = self.make_card("状态")
+        self.status_card = status_card
         status_row = QHBoxLayout()
         status_row.setSpacing(8)
         self.model_status = QLabel()
@@ -157,6 +168,7 @@ class Settings(QWidget):
         text_layout.addWidget(self.text_page, 1)
 
         preferences_card, preferences_layout = self.make_card("偏好")
+        self.preferences_card = preferences_card
         shortcut_label = QLabel("全局截图快捷键")
         shortcut_label.setObjectName("fieldLabel")
         preferences_layout.addWidget(shortcut_label)
@@ -281,10 +293,65 @@ class Settings(QWidget):
         self.load_config()
         self.refresh()
 
+    def register_notice_sinks(self, center):
+        """Let the notice centre use this window's banner."""
+        self._notices = center
+        self.banner.action_invoked.connect(center.invoke)
+        center.register_sink(BannerSink(self.banner))
+
+    def showEvent(self, event):  # noqa: N802 - Qt naming
+        """Catch up on anything that happened while this window was hidden."""
+        super().showEvent(event)
+        center = getattr(self, "_notices", None)
+        if center is not None:
+            center.replay()
+
+    def notify(self, notice):
+        """Post through the centre when one exists, else show it directly.
+
+        The window is constructed before the centre, and construction-time
+        validation still has to reach the user.
+        """
+        center = getattr(self, "_notices", None)
+        if center is not None:
+            center.post(notice)
+        else:
+            self.banner.show_notice(notice)
+
+    def _nav_targets(self):
+        """Where each named destination lives in this window.
+
+        Built lazily because it references widgets created during __init__;
+        keeping it as data rather than a chain of if-statements is what lets
+        a message carry a destination instead of describing one.
+        """
+        return {
+            Destination.CAPTURE_LANGUAGES: (0, self.language_card, self.source_language),
+            Destination.CAPTURE_STATUS: (0, self.status_card, None),
+            Destination.TEXT_INPUT: (1, self.text_page, getattr(self.text_page, "source_text", None)),
+            Destination.SYSTEM_HOTKEY: (2, self.preferences_card, self.hotkey),
+            Destination.MODEL_SELECTION: (2, self.model_card, self.translation_model),
+            Destination.MODEL_DOWNLOAD: (2, self.model_card, self.download_button),
+            Destination.MODEL_DIRECTORY: (2, self.model_card, self.directory),
+            Destination.REMOTE_MODE: (2, self.remote_card, self.remote_card.mode),
+            Destination.REMOTE_PAIRING: (2, self.remote_card, self.remote_card.remote_url),
+            Destination.HOST_SERVICE: (2, self.remote_card, self.remote_card.service_enabled),
+        }
+
+    def navigate(self, destination, *, focus: bool = True) -> bool:
+        target = self._nav_targets().get(destination)
+        if target is None:
+            return False
+        tab_index, anchor, widget = target
+        self.tabs.setCurrentIndex(tab_index)
+        if anchor is not None:
+            self.scroll.ensureWidgetVisible(anchor, 0, 16)
+        if focus and widget is not None:
+            widget.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        return True
+
     def focus_language_controls(self):
-        self.tabs.setCurrentIndex(0)
-        self.scroll.ensureWidgetVisible(self.language_card, 0, 16)
-        self.source_language.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self.navigate(Destination.CAPTURE_LANGUAGES)
 
     def make_page(self):
         page = QWidget()
@@ -468,6 +535,11 @@ class Settings(QWidget):
             self.text_page.refresh()
 
     def set_status(self, text):
+        """Model-card status line. Download progress and model paths only.
+
+        Anything the user must not miss goes through `notify`, because this
+        label only exists on the system settings tab.
+        """
         self.status.setText(text)
         self.status.setVisible(bool(text))
 
@@ -477,8 +549,19 @@ class Settings(QWidget):
             self.directory.setText(directory)
 
     def apply(self):
-        if self.c.busy or self.c.download_token:
-            QMessageBox.information(self, "正在处理", "请先完成或取消当前任务")
+        occupancy = self.c.occupancy()
+        if occupancy.busy:
+            # Reporting, not asking: a modal dialog here made the user
+            # dismiss a box to learn something a banner can simply state.
+            self.notify(
+                Notice(
+                    "settings-busy",
+                    Severity.INFO,
+                    "暂时无法保存",
+                    detail=f"{occupancy.reason}，请先完成或取消当前任务",
+                    context="settings",
+                )
+            )
             return False
         sequence = self.hotkey.keySequence().toString()
         try:
@@ -489,7 +572,14 @@ class Settings(QWidget):
             with self.c.hotkey.pending(sequence):
                 return self._apply_locked(sequence)
         except Exception as error:
-            QMessageBox.warning(self, "设置未保存", str(error))
+            self.notify(
+                error_notice(
+                    "settings-not-saved",
+                    "设置未保存",
+                    detail=str(error),
+                    context="settings",
+                )
+            )
             return False
 
     def _apply_locked(self, sequence):
@@ -532,7 +622,8 @@ class Settings(QWidget):
         elif service_fields_changed(previous_config, config):
             self.c.apply_host_service()
         self.c.refresh_language_actions()
-        self.set_status("已保存")
+        # Visible from whichever tab the save button was pressed on.
+        self.notify(success_notice("settings-saved", "设置已保存", context="settings"))
         self.refresh()
         return True
 

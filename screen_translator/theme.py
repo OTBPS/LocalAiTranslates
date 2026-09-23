@@ -61,6 +61,35 @@ def application_stylesheet() -> str:
             background: {c["surface"]};
             border-top: 3px solid {c["separator"]};
         }}
+        QFrame#noticeCard {{
+            background: {c["surface"]};
+            border: 2px solid {c["border"]};
+            border-radius: 0;
+        }}
+        QFrame#noticeCard[severity="error"] {{
+            background: {c["primary"]};
+        }}
+        /* Id and attribute must be combined. An id selector outranks a bare
+           attribute selector in Qt, so `QLabel[severity="error"]` alone
+           loses to `QLabel#helperText` and the detail line stays muted grey
+           on the red fill -- unreadable, and easy to miss because the title
+           above it does change. */
+        QLabel[severity="error"],
+        QLabel#noticeTitle[severity="error"],
+        QLabel#helperText[severity="error"] {{
+            color: #FFFFFF;
+        }}
+        QFrame#noticeCard[severity="success"] {{
+            background: {c["surface_tint"]};
+        }}
+        QFrame#noticeCard[severity="warning"] {{
+            background: {c["surface_tint"]};
+        }}
+        QLabel#noticeTitle {{
+            font-family: "Arial Black", "Microsoft YaHei UI";
+            font-size: 14px;
+            font-weight: 900;
+        }}
         QFrame#divider {{
             background: {c["separator"]};
             border: none;
