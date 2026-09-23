@@ -113,6 +113,39 @@ def supersedes(incoming: Notice, existing: Notice) -> bool:
     return incoming.notice_id == existing.notice_id
 
 
+#: Who wins a surface that can only hold one message at a time.
+#:
+#: Progress sits level with errors on purpose. It reports something running
+#: right now and clears itself when the run ends, so an ambient warning must
+#: not push it aside -- but a failure may, because the run has stopped.
+_SLOT_RANK = {
+    Severity.PROGRESS: 4,
+    Severity.INFO: 1,
+    Severity.SUCCESS: 2,
+    Severity.WARNING: 3,
+    Severity.ERROR: 4,
+}
+
+
+def outranks(incoming: Notice, showing: Notice) -> bool:
+    """Whether ``incoming`` may take a single-slot surface from ``showing``.
+
+    The page banner has one slot, and both ``NoticeCenter.replay`` and an
+    ordinary post write into it. Without this the last writer won: opening
+    the settings window for the first time replayed a capture failure into
+    the banner and then the first-run warning landed on top of it, hiding an
+    error the tray may already have swallowed. Arrival order is not a
+    ranking, so it must not act as one.
+    """
+    if incoming.notice_id == showing.notice_id:
+        return True  # an update to the same message, not a competitor
+    if incoming.severity is Severity.PROGRESS:
+        return True  # live activity the user just started; it clears itself
+    if not showing.persistent:
+        return True  # what is on screen is on its way out anyway
+    return _SLOT_RANK[incoming.severity] >= _SLOT_RANK[showing.severity]
+
+
 def progress_notice(
     notice_id: str,
     title: str,

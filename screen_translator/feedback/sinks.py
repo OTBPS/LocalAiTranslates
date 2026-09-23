@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..design import metrics
-from .notices import Notice, Severity, Surface
+from .notices import Notice, Severity, Surface, outranks
 
 #: Read once: a stylesheet reload does not rebuild these widgets.
 SIZES = metrics.ACTIVE
@@ -58,6 +58,9 @@ class NoticeBanner(QWidget):
     """An in-page message with room for the actions that resolve it."""
 
     action_invoked = Signal(str, str)
+    #: The slot is free again. Whoever owns the centre replays into it, so a
+    #: sticky error that a transient success covered comes back by itself.
+    cleared = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -147,8 +150,11 @@ class NoticeBanner(QWidget):
 
     def clear(self) -> None:
         self._timer.stop()
+        had_notice = self._notice is not None
         self._notice = None
         self.hide()
+        if had_notice:
+            self.cleared.emit()
 
     def revoke(self, notice_id: str) -> None:
         if self._notice is not None and self._notice.notice_id == notice_id:
@@ -192,6 +198,12 @@ class BannerSink:
 
     def present(self, notice: Notice) -> None:
         if self._context and notice.context != self._context:
+            return
+        showing = self._banner.notice
+        if showing is not None and not outranks(notice, showing):
+            # One slot, and what is in it matters more. Dropping this copy is
+            # safe: the centre keeps the notice active and replays it when
+            # the slot frees up.
             return
         self._banner.show_notice(notice)
 

@@ -156,8 +156,16 @@ Control heights are in [ADR 0003](decisions/0003-control-heights.md).
 - Keyboard order follows visual order; every action is reachable without a
   mouse.
 - Icon-only buttons require accessible names and tooltips.
-- Disabled controls are muted **and** carry the reason in their tooltip.
-  `set_enabled_with_reason` does both in one call so they cannot drift.
+- Disabled controls are muted **and** carry the reason in their tooltip
+  *whenever that reason is not already visible on screen*.
+  `set_enabled_with_reason` does both in one call so the two cannot drift.
+  The exemption is deliberately narrow and exists because of the forbidden
+  pattern below about repeating an adjacent value: a "copy translation"
+  button greyed out beside a visibly empty output box does not need a
+  tooltip announcing that the box is empty. Anything the user *cannot*
+  see — a capture already running, a model that was never downloaded —
+  must say so, and `test_disabled_controls_explain_themselves` holds those
+  cases.
 - Long-running OCR and translation work stays off the UI thread.
 
 ## Scope

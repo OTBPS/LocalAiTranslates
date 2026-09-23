@@ -303,6 +303,9 @@ class Settings(QWidget):
         """Let the notice centre use this window's banner."""
         self._notices = center
         self.banner.action_invoked.connect(center.invoke)
+        # A message leaving the slot is not the same as it being handled:
+        # anything still active goes back on screen.
+        self.banner.cleared.connect(center.replay)
         center.register_sink(BannerSink(self.banner))
 
     def showEvent(self, event):  # noqa: N802 - Qt naming

@@ -167,14 +167,24 @@ class TextTranslationPage(QWidget):
         blocked = capture_busy or not ready
         reason = occupancy.reason if capture_busy else ("" if ready else self.c.backend.describe())
         has_input = bool(self.source_text.toPlainText().strip())
-        self.source_language.setEnabled(not capture_busy and not self._running)
-        self.target_language.setEnabled(not capture_busy and not self._running)
+        # Neither reason for locking the language row is readable from the
+        # row itself: a capture running behind this window shows nothing
+        # here at all, and the status line that reports a translation in
+        # progress sits at the bottom of the page, nowhere near these
+        # controls. Contrast the buttons below, which are greyed out beside
+        # the empty box that already explains them and so stay silent.
+        language_reason = occupancy.reason if capture_busy else ("翻译进行中" if self._running else "")
+        language_editable = not capture_busy and not self._running
+        set_enabled_with_reason(self.source_language, language_editable, language_reason)
+        set_enabled_with_reason(self.target_language, language_editable, language_reason)
         pair = swap_language_pair(
             self.source_language.currentData(),
             self.target_language.currentData(),
             self.c.detected_source_language,
         )
-        self.swap_button.setEnabled(bool(pair) and not capture_busy and not self._running)
+        set_enabled_with_reason(
+            self.swap_button, bool(pair) and language_editable, language_reason
+        )
         self.source_text.setReadOnly(self._running)
         set_enabled_with_reason(
             self.translate_button, has_input and not blocked and not self._running, reason
