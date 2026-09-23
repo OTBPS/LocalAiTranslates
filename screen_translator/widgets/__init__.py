@@ -21,7 +21,7 @@ from .buttons import button, danger_button, icon_button, primary_button
 from .enablement import set_enabled_with_reason
 from .fields import Field, FieldGrid
 from .icons import themed_icon
-from .inputs import ComboBox, SpinBox
+from .inputs import ComboBox, GrowingTextEdit, SpinBox
 from .rows import LanguageRow
 from .status import InlineMessage, StatusChip, chip_palette
 from .surfaces import AppHeader, Card, Divider, InsetGroup
@@ -31,6 +31,7 @@ __all__ = [
     "AppHeader",
     "Card",
     "ComboBox",
+    "GrowingTextEdit",
     "Divider",
     "Field",
     "FieldGrid",

@@ -13,9 +13,7 @@ from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
-    QPlainTextEdit,
     QPushButton,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -23,12 +21,18 @@ from PySide6.QtWidgets import (
 from .core import LANGUAGE_NAMES, SOURCE_LANGUAGES, TARGET_LANGUAGES, swap_language_pair
 from .design import metrics
 from .models import get_translation_model
-from .widgets import Card, LanguageRow, set_enabled_with_reason
+from .widgets import Card, GrowingTextEdit, LanguageRow, set_enabled_with_reason
 
 SIZES = metrics.ACTIVE
 #: Tall enough for a short paragraph without pushing the actions below
 #: the fold at the minimum window height.
-EDITOR_HEIGHT = 104
+#: The box starts at three lines and grows with what is typed into it.
+#: Three because that is enough to see a sentence wrap without the empty
+#: state claiming the page.
+EDITOR_MIN_LINES = 3
+#: Beyond this the box scrolls instead of growing, so a long paste cannot
+#: push the translation and the buttons arbitrarily far down the page.
+EDITOR_MAX_LINES = 14
 
 READY_STATUS = "就绪"
 TRANSLATING_STATUS = "正在翻译…"
@@ -65,26 +69,27 @@ class TextTranslationPage(QWidget):
         source_label = QLabel("原文")
         source_label.setObjectName("fieldLabel")
         text_layout.addWidget(source_label)
-        self.source_text = QPlainTextEdit()
+        self.source_text = GrowingTextEdit(
+            minimum_lines=EDITOR_MIN_LINES, maximum_lines=EDITOR_MAX_LINES
+        )
         self.source_text.setAccessibleName("原文输入框")
         self.source_text.setPlaceholderText("输入或粘贴要翻译的文本")
         self.source_text.setTabChangesFocus(True)
-        self.source_text.setMinimumHeight(EDITOR_HEIGHT)
-        # Ignore the editor's own tall hint so the action row stays above the fold.
-        self.source_text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         self.source_text.textChanged.connect(self.input_changed)
-        text_layout.addWidget(self.source_text, 1)
+        # No stretch factor: the box decides its own height now, and a
+        # stretch here would go straight back to filling the page.
+        text_layout.addWidget(self.source_text)
 
         target_label = QLabel("译文")
         target_label.setObjectName("fieldLabel")
         text_layout.addWidget(target_label)
-        self.target_text = QPlainTextEdit()
+        self.target_text = GrowingTextEdit(
+            minimum_lines=EDITOR_MIN_LINES, maximum_lines=EDITOR_MAX_LINES
+        )
         self.target_text.setAccessibleName("译文输出框")
         self.target_text.setReadOnly(True)
         self.target_text.setTabChangesFocus(True)
-        self.target_text.setMinimumHeight(EDITOR_HEIGHT)
-        self.target_text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
-        text_layout.addWidget(self.target_text, 1)
+        text_layout.addWidget(self.target_text)
 
         self.status = QLabel()
         self.status.setObjectName("helperText")
