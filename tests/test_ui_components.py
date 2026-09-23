@@ -168,7 +168,9 @@ def test_the_language_row_exposes_its_parts_by_name():
     assert row.selection() == (row.source.currentData(), row.target.currentData())
 
 
-def test_the_application_icon_still_covers_every_windows_size():
+def test_the_application_icon_loads_through_qt():
+    # The artwork itself is covered by tests/test_app_icon.py; this is
+    # the half that says Qt can read the file the application ships.
     icon = create_app_icon()
 
     assert not icon.isNull()

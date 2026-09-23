@@ -60,6 +60,7 @@ Filename: "{app}\{#ProductExe}"; Parameters: "--show-settings"; Description: "�
 
 [Code]
 #include "installer.versioning.iss"
+#include "installer.shell.iss"
 
 function GetExistingInstallDir(Param: String): String;
 var
@@ -105,4 +106,12 @@ begin
       MsgBox('已安装的版本 ' + InstalledVersion + ' 比此补丁更新。为避免降级，更新已取消。', mbError, MB_OK);
     Result := False;
   end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    // The icon file is replaced in place, so Explorer has to be told
+    // or the taskbar and existing shortcuts keep the cached artwork.
+    RefreshShellIcons();
 end;

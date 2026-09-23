@@ -12,6 +12,7 @@ SCRIPTS = (
     "installer.update.iss",
     "installer.common.iss",
     "installer.versioning.iss",
+    "installer.shell.iss",
 )
 SHARED_ROOTS = (r"D:\AI\Models", r"D:\AI\Training", "AI_MODEL_ROOT", "AI_TRAINING_ROOT")
 
@@ -68,3 +69,29 @@ def test_the_incremental_installer_does_not_create_an_uninstaller_that_could_pur
 
     assert "Uninstallable=no" in script
     assert "CreateUninstallRegKey=no" in script
+
+
+@pytest.mark.parametrize("name", ("installer.iss", "installer.update.iss"))
+def test_the_installer_tells_explorer_the_icon_may_have_changed(name):
+    """Otherwise the taskbar keeps the cached artwork until a sign-out.
+
+    The v0.5.1 notes claimed this already happened; it did not. It
+    started to matter when the icon was redrawn, which is the one case
+    where a stale cache is visible.
+    """
+    script = (ROOT / name).read_text(encoding="utf-8")
+
+    assert '#include "installer.shell.iss"' in script
+    assert "RefreshShellIcons()" in script
+    assert "ssPostInstall" in script
+
+
+def test_the_shell_refresh_is_declared_once_and_shared():
+    shared = (ROOT / "installer.shell.iss").read_text(encoding="utf-8")
+
+    # A Win32 declaration duplicated across two scripts is a declaration
+    # that will eventually disagree with itself.
+    assert "SHChangeNotify@shell32.dll" in shared
+    for name in ("installer.iss", "installer.update.iss"):
+        script = (ROOT / name).read_text(encoding="utf-8")
+        assert "shell32.dll" not in script

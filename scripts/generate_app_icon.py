@@ -1,70 +1,141 @@
-"""Generate the checked-in Windows icon from the constructivist master artwork."""
+"""Generate the checked-in Windows icon from the master artwork.
+
+One idea per icon: the 译 glyph on a rounded blue tile. The retired
+constructivist mark carried five -- a red field, a black diagonal, a
+yellow disc, four crop brackets and the glyph -- and at 16 px that is
+not a mark, it is a smudge.
+
+**Each size is rendered at its own scale rather than downsampled from
+one master.** 译 has thirteen strokes; shrinking a 1024 px render to
+16 px turns them into grey. Small tiles therefore give the glyph more of
+the square and drop the highlight, which is below a pixel down there
+anyway. Pillow's ICO writer uses a provided image whose size matches
+exactly and only downsamples when one is missing, so supplying all nine
+means none of them are guesses.
+
+Colours come from `design.primitives`, so the icon and the interface
+cannot drift apart.
+"""
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from screen_translator.design.primitives import BLUE, GREY, mix  # noqa: E402
+
 ASSETS = ROOT / "screen_translator" / "assets"
-CANVAS = 1024
-INK = "#151515"
-RED = "#C51D23"
-YELLOW = "#E8BC35"
-PAPER = "#F8F1E2"
+
+#: Every size Windows asks for, from the notification area to the
+#: extra-large Explorer view.
+SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
+#: The PNG beside the ICO, for documentation and the repository.
+MASTER = 1024
+
+#: Rendered this much larger and then reduced, so the glyph edges are
+#: properly antialiased instead of aliased at the target size.
+SUPERSAMPLE = 8
+
+GLYPH = "译"
+
+#: Roughly the iOS corner as Pillow can draw it. Qt and Pillow both have
+#: circular corners only; at this radius the absence of a continuous
+#: curve is not visible.
+RADIUS_RATIO = 0.2237
+#: A hair of transparent margin so the rounded corners are not clipped
+#: by whatever the shell composites the icon onto.
+INSET_RATIO = 0.015
+
+TOP = BLUE[50]
+BOTTOM = BLUE[70]
+INK = GREY[0]
 
 
-def _font(size: int) -> ImageFont.FreeTypeFont:
+def _font(pixels: int) -> ImageFont.FreeTypeFont:
     candidates = (
         Path(r"C:\Windows\Fonts\msyhbd.ttc"),
         Path(r"C:\Windows\Fonts\msyh.ttc"),
     )
     for candidate in candidates:
         if candidate.exists():
-            return ImageFont.truetype(str(candidate), size=size, index=0)
+            return ImageFont.truetype(str(candidate), size=pixels, index=0)
     raise FileNotFoundError("Microsoft YaHei is required to generate the application icon")
 
 
-def render() -> Image.Image:
-    image = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
+def glyph_ratio(size: int) -> float:
+    """How much of the tile the character takes, by target size.
+
+    Optical sizing, in the same spirit as the Display and Text cuts of
+    the interface font. A small tile has fewer pixels to spend on
+    thirteen strokes, so it spends proportionally more of them.
+    """
+    if size <= 24:
+        return 0.80
+    if size <= 48:
+        return 0.72
+    return 0.62
+
+
+def tile(size: int) -> Image.Image:
+    """One icon, rendered for one target size."""
+    scale = size * SUPERSAMPLE
+    image = Image.new("RGBA", (scale, scale), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
 
-    draw.rectangle((48, 48, 976, 976), fill=RED, outline=INK, width=40)
-    draw.polygon(((540, 68), (956, 68), (956, 956), (272, 956)), fill=INK)
-    draw.ellipse((638, 100, 902, 364), fill=YELLOW, outline=INK, width=28)
+    inset = round(scale * INSET_RATIO)
+    box = (inset, inset, scale - inset - 1, scale - inset - 1)
+    radius = round((scale - inset * 2) * RADIUS_RATIO)
 
-    for rectangle in (
-        (150, 174, 198, 350),
-        (150, 174, 326, 222),
-        (698, 174, 874, 222),
-        (826, 174, 874, 350),
-        (150, 674, 198, 850),
-        (150, 802, 326, 850),
-        (698, 802, 874, 850),
-        (826, 674, 874, 850),
-    ):
-        draw.rectangle(rectangle, fill=PAPER)
+    # A vertical gradient, painted as rows and then masked to the
+    # rounded square. Pillow has no gradient fill.
+    gradient = Image.new("RGBA", (scale, scale))
+    painter = ImageDraw.Draw(gradient)
+    for y in range(scale):
+        painter.line(((0, y), (scale, y)), fill=mix(TOP, BOTTOM, y / max(1, scale - 1)))
+    mask = Image.new("L", (scale, scale), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(box, radius=radius, fill=255)
+    image.paste(gradient, (0, 0), mask)
 
-    font = _font(476)
-    glyph = "译"
-    bounds = draw.textbbox((0, 0), glyph, font=font, stroke_width=18)
-    width = bounds[2] - bounds[0]
-    height = bounds[3] - bounds[1]
-    position = ((CANVAS - width) / 2 - bounds[0], 512 - height / 2 - bounds[1] + 18)
-    draw.text(position, glyph, font=font, fill=PAPER, stroke_width=18, stroke_fill=INK)
-    return image
+    # The specular stand-in from the visual direction: a light stroke
+    # along the top edge only. Sub-pixel on a small tile, so skipped.
+    if size >= 48:
+        highlight = round(scale * 0.012)
+        draw.rounded_rectangle(
+            box,
+            radius=radius,
+            outline=(255, 255, 255, 64),
+            width=max(1, highlight),
+        )
+
+    pixels = round(scale * glyph_ratio(size))
+    font = _font(pixels)
+    bounds = draw.textbbox((0, 0), GLYPH, font=font)
+    width, height = bounds[2] - bounds[0], bounds[3] - bounds[1]
+    draw.text(
+        ((scale - width) / 2 - bounds[0], (scale - height) / 2 - bounds[1]),
+        GLYPH,
+        font=font,
+        fill=INK,
+    )
+    return image.resize((size, size), Image.Resampling.LANCZOS)
 
 
 def main() -> None:
     ASSETS.mkdir(parents=True, exist_ok=True)
-    image = render()
-    image.save(ASSETS / "app-icon.png", optimize=True)
-    image.save(
+    tile(MASTER).save(ASSETS / "app-icon.png", optimize=True)
+    frames = [tile(size) for size in sorted(SIZES, reverse=True)]
+    frames[0].save(
         ASSETS / "app-icon.ico",
         format="ICO",
-        sizes=((16, 16), (20, 20), (24, 24), (32, 32), (40, 40), (48, 48), (64, 64), (128, 128), (256, 256)),
+        sizes=tuple((size, size) for size in SIZES),
+        append_images=frames[1:],
     )
+    print(ASSETS / "app-icon.ico")
 
 
 if __name__ == "__main__":

@@ -44,10 +44,21 @@
 - 打好的 exe 跑 `--self-test D:\AI\Models`：真实 PaddleOCR（CUDA）+ 真实 llama.cpp 两轮全绿，冷 32.08 s、热 0.92 s / OCR 47 ms / 4 块，四种语言方向译文正确。
 - `installer.update.iss` 的两条 Source 未变，assets 目录是通配投递，因此规范化后的图标与新增的 `check-dark.svg` 都能随增量包送达；`test_the_incremental_package_ships_only_the_launcher_and_ui_assets` 仍然通过。`check.svg` 保留原名，`build_update.ps1` 的完整性哨兵不受影响。
 
+### 应用图标（P8）
+
+- 新图标：蓝色渐变圆角方块 + 白色 译。旧标同时塞了红底、黑斜切、黄圆盘、四个裁切角标和字，16 px 下是一团。
+- **九个尺寸各自渲染，不是从 1024 缩下来的**：译 有十三笔，缩到 16 px 会糊成灰块。小图标把字放大到方块的 80%（256 px 时是 62%），高光描边在 48 px 以下直接不画——那里它不足一个像素，只会看起来像脏边。Pillow 的 ICO 写入器只在缺某个尺寸时才降采样，九个都给了就一个都不是猜的。
+- 实测字形占比：256 px 下墨迹 153×152 / 256 = **59.8%**，居中偏差 ≤ 2 px。
+- 三种底色（浅任务栏 `#F3F3F3`、深任务栏 `#202020`、中间调壁纸 `#6E7A86`）× 五个小尺寸目视全部可辨，产物 `artifacts/ui/app-icon-v080-contexts.png`、`app-icon-v080-sizes.png`。
+- 颜色从 `design.primitives` 导入，测试断言生成脚本里没有色值字面量——旧图标正是因为写死了四个色值，才比它所属的设计方向多活了两个版本。
+- **修掉一处文档与代码不符**：v0.5.1 的发布说明写了"安装或更新后通知 Explorer"，但没有任何 iss 脚本包含该调用。新增共享的 `installer.shell.iss`（`SHChangeNotify` + `SHCNE_ASSOCCHANGED`），完整版 / 客户端 / 增量三个脚本都在 `ssPostInstall` 调用，并加了断言。三个版本没被发现，是因为图标一直没变过。
+- `ISCC.exe` 实编译 `installer.update.iss` 与 `installer.client.iss`（后者 include 完整版脚本）均 exit 0，产出 43,389,774 / 106,775,978 字节的真实安装包。第一次编译**失败**并被抓到：`installer.shell.iss` 的头部注释用了 `;`，那在 `[Code]` 段里不是注释而是空语句。已改为 `//`。
+
 ### 仍待真机目视确认
 
 - Mica 窗口材质（离屏渲染拿不到 DWM 合成）。
 - 深色模式下的原生标题栏是否跟着变深。
+- 新图标在真实任务栏、开始菜单、Alt-Tab 与桌面快捷方式上的观感；以及原地更新后 Explorer 是否确实刷掉了旧图标缓存。
 - 150% DPI（`QT_SCALE_FACTOR` 是进程级变量，只能 subprocess 跑）。
 
 ## 操作流程重构第一阶段（2026-09-23）

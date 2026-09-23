@@ -80,8 +80,11 @@ editorial discipline that the last change bought.
 - The regression test that pinned the old direction is inverted rather than
   deleted: `test_theme_contract_follows_the_apple_direction` now asserts
   that system blue is present and constructivist red is absent from chrome.
-  It still permits red in the application icon.
+  The icon was the one place it still permitted red; ADR 0007 removed
+  the need for that exception.
 - Red no longer has to be both accent and danger. System blue is the accent;
   red means danger only.
 - Before/after screenshots are checked in under `artifacts/ui/`; the
   constructivist set is the visual evidence for this ADR.
+- The application icon was left out of scope here and redrawn separately
+  in [ADR 0007](0007-application-icon.md).

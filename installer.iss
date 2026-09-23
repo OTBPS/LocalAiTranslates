@@ -59,6 +59,7 @@ Type: filesandordirs; Name: "{localappdata}\ScreenTranslator"; Check: ShouldPurg
 
 [Code]
 #include "installer.versioning.iss"
+#include "installer.shell.iss"
 
 var
   PurgeUserData: Boolean;
@@ -117,4 +118,12 @@ end;
 function ShouldPurgeUserData(): Boolean;
 begin
   Result := PurgeUserData;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    // The icon file is replaced in place, so Explorer has to be told
+    // or the taskbar and existing shortcuts keep the cached artwork.
+    RefreshShellIcons();
 end;

@@ -51,6 +51,14 @@ All notable user-visible changes are recorded here. Versions follow semantic ver
   when it appears.
 - Headings no longer ask for a font weight Chinese fonts do not have, which was making them render
   blurry at 100% scaling.
+- A new application icon: the 译 character on a rounded blue tile. The old mark carried a red
+  field, a black diagonal, a yellow disc and four crop brackets, which at the 16-pixel size the
+  notification area actually shows was a smudge. Each of the nine icon sizes is now drawn for its
+  own pixel count rather than shrunk from one large picture, so the character stays readable down
+  to 24 pixels.
+- Installing or updating now tells Explorer the icon may have changed, so the taskbar and existing
+  shortcuts stop showing the previous one without a sign-out. The v0.5.1 notes said this already
+  happened; it did not.
 
 ### Reliability and compatibility
 
