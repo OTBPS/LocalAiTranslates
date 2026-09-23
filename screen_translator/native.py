@@ -29,6 +29,11 @@ def animations_enabled() -> bool:
 
 
 def hotkey_parts(sequence):
+    # Callers have passed a Config object here by accident. Without this the
+    # failure surfaces as an AttributeError from inside an exception handler,
+    # which is the worst place to discover a type error.
+    if not isinstance(sequence, str):
+        raise ValueError("快捷键格式错误")
     parts = sequence.upper().split("+")
     modifiers = 0x4000
     mapping = {"CTRL": 2, "ALT": 1, "SHIFT": 4, "META": 8, "WIN": 8}

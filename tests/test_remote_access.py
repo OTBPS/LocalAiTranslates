@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from screen_translator.remote.access import (
@@ -10,6 +13,10 @@ from screen_translator.remote.access import (
 from screen_translator.remote.tailnet import parse_addresses, parse_peer_route
 
 SECRET = "s" * 32
+
+# Recorded from a real machine, not written by hand. See tests/data/README.md.
+DATA = Path(__file__).resolve().parent / "data"
+TAILSCALE_STATUS = json.loads((DATA / "tailscale_status.json").read_text(encoding="utf-8"))
 
 
 @pytest.mark.parametrize(
@@ -140,15 +147,35 @@ def test_tailscale_ip_output_is_filtered_to_tailnet_addresses():
     assert parse_addresses("command not found") == []
 
 
-def test_peer_route_classification():
-    document = {
-        "Peer": {
-            "key1": {"TailscaleIPs": ["100.101.102.103"], "CurAddr": "1.2.3.4:41641", "Relay": ""},
-            "key2": {"TailscaleIPs": ["100.104.105.106"], "CurAddr": "", "Relay": "sfo"},
-        }
-    }
+def test_a_direct_peer_is_not_reported_as_relayed():
+    """The regression this fixture exists for.
 
-    assert parse_peer_route(document, "100.101.102.103") == "direct"
-    assert parse_peer_route(document, "100.104.105.106") == "relay"
-    assert parse_peer_route(document, "100.1.1.1") == "unknown"
-    assert parse_peer_route("not-a-document", "100.101.102.103") == "unknown"
+    `Relay` names the peer's home DERP region and is populated even when the
+    connection is direct, so a classifier that reads it first calls every
+    direct peer relayed. The previous hand-written fixture assumed a direct
+    peer reports `Relay: ""`, which Tailscale never does, so it confirmed the
+    bug instead of catching it.
+    """
+    peer = next(
+        item
+        for item in TAILSCALE_STATUS["Peer"].values()
+        if item["HostName"] == "laptop"
+    )
+    assert peer["CurAddr"] and peer["Relay"], "fixture must keep both fields set"
+
+    assert parse_peer_route(TAILSCALE_STATUS, "100.64.0.20") == "direct"
+
+
+def test_peer_route_classification():
+    assert parse_peer_route(TAILSCALE_STATUS, "100.64.0.20") == "direct"
+    assert parse_peer_route(TAILSCALE_STATUS, "100.64.0.30") == "relay"
+    assert parse_peer_route(TAILSCALE_STATUS, "100.64.0.40") == "relay"
+    assert parse_peer_route(TAILSCALE_STATUS, "100.1.1.1") == "unknown"
+    assert parse_peer_route("not-a-document", "100.64.0.20") == "unknown"
+
+
+def test_the_recorded_fixture_carries_no_identifying_values():
+    text = (DATA / "tailscale_status.json").read_text(encoding="utf-8")
+
+    for leaked in ("tail39ac8f", "cnpengbo", "outlook.com", "100.100.", "100.92.", "172.20."):
+        assert leaked not in text, f"fixture leaks {leaked}; see tests/data/README.md"

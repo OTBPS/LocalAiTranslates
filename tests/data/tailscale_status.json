@@ -1,0 +1,192 @@
+{
+  "AuthURL": "",
+  "BackendState": "Running",
+  "ClientVersion": null,
+  "CurrentTailnet": {
+    "MagicDNSEnabled": true,
+    "MagicDNSSuffix": "tailnet-example.ts.net",
+    "Name": "example.com"
+  },
+  "MagicDNSSuffix": "tailnet-example.ts.net",
+  "Peer": {
+    "nodekey:1111111111111111111111111111111111111111111111111111111111111111": {
+      "Active": true,
+      "Addrs": [],
+      "AllowedIPs": [
+        "100.64.0.20/32",
+        "fd7a:115c:a1e0::1002/128"
+      ],
+      "Created": "2026-09-19T01:34:20.321330396Z",
+      "CurAddr": "192.168.1.50:41641",
+      "DNSName": "laptop.tailnet-example.ts.net.",
+      "ExitNode": false,
+      "ExitNodeOption": false,
+      "HostName": "laptop",
+      "ID": "2",
+      "InEngine": true,
+      "InMagicSock": true,
+      "InNetworkMap": true,
+      "KeyExpiry": "2027-03-18T01:34:20Z",
+      "LastHandshake": "2026-09-22T23:19:28.2279013-04:00",
+      "LastSeen": "2026-09-22T23:50:00.1Z",
+      "LastWrite": "2026-09-22T23:19:45.2971321-04:00",
+      "NoFileSharingReason": "",
+      "NodeID": 7165472351530182,
+      "OS": "windows",
+      "Online": true,
+      "PeerAPIURL": [
+        "http://100.64.0.20:40000",
+        "http://[fd7a:115c:a1e0::1002]:40001"
+      ],
+      "PeerRelay": "",
+      "PublicKey": "nodekey:1111111111111111111111111111111111111111111111111111111111111111",
+      "Relay": "iad",
+      "RxBytes": 82036,
+      "TaildropTarget": 1,
+      "TailscaleIPs": [
+        "100.64.0.20",
+        "fd7a:115c:a1e0::1002"
+      ],
+      "TxBytes": 9124,
+      "UserID": 1
+    },
+    "nodekey:2222222222222222222222222222222222222222222222222222222222222222": {
+      "Active": true,
+      "Addrs": [],
+      "AllowedIPs": [
+        "100.64.0.30/32",
+        "fd7a:115c:a1e0::1003/128"
+      ],
+      "Created": "2026-09-19T01:34:20.321330396Z",
+      "CurAddr": "",
+      "DNSName": "tablet.tailnet-example.ts.net.",
+      "ExitNode": false,
+      "ExitNodeOption": false,
+      "HostName": "tablet",
+      "ID": "3",
+      "InEngine": true,
+      "InMagicSock": true,
+      "InNetworkMap": true,
+      "KeyExpiry": "2027-03-18T01:34:20Z",
+      "LastHandshake": "2026-09-22T23:19:28.2279013-04:00",
+      "LastSeen": "2026-09-22T23:50:00.1Z",
+      "LastWrite": "2026-09-22T23:19:45.2971321-04:00",
+      "NoFileSharingReason": "",
+      "NodeID": 7165472351530182,
+      "OS": "windows",
+      "Online": true,
+      "PeerAPIURL": [
+        "http://100.64.0.30:40000",
+        "http://[fd7a:115c:a1e0::1003]:40001"
+      ],
+      "PeerRelay": "",
+      "PublicKey": "nodekey:2222222222222222222222222222222222222222222222222222222222222222",
+      "Relay": "sfo",
+      "RxBytes": 512,
+      "TaildropTarget": 1,
+      "TailscaleIPs": [
+        "100.64.0.30",
+        "fd7a:115c:a1e0::1003"
+      ],
+      "TxBytes": 512,
+      "UserID": 1
+    },
+    "nodekey:3333333333333333333333333333333333333333333333333333333333333333": {
+      "Active": false,
+      "Addrs": [],
+      "AllowedIPs": [
+        "100.64.0.40/32",
+        "fd7a:115c:a1e0::1004/128"
+      ],
+      "Created": "2026-09-19T01:34:20.321330396Z",
+      "CurAddr": "",
+      "DNSName": "desktop.tailnet-example.ts.net.",
+      "ExitNode": false,
+      "ExitNodeOption": false,
+      "HostName": "desktop",
+      "ID": "4",
+      "InEngine": true,
+      "InMagicSock": true,
+      "InNetworkMap": true,
+      "KeyExpiry": "2027-03-18T01:34:20Z",
+      "LastHandshake": "2026-09-22T23:19:28.2279013-04:00",
+      "LastSeen": "2026-09-21T12:00:00Z",
+      "LastWrite": "2026-09-22T23:19:45.2971321-04:00",
+      "NoFileSharingReason": "",
+      "NodeID": 7165472351530182,
+      "OS": "windows",
+      "Online": false,
+      "PeerAPIURL": [
+        "http://100.64.0.40:40000",
+        "http://[fd7a:115c:a1e0::1004]:40001"
+      ],
+      "PeerRelay": "",
+      "PublicKey": "nodekey:3333333333333333333333333333333333333333333333333333333333333333",
+      "Relay": "ord",
+      "RxBytes": 0,
+      "TaildropTarget": 1,
+      "TailscaleIPs": [
+        "100.64.0.40",
+        "fd7a:115c:a1e0::1004"
+      ],
+      "TxBytes": 0,
+      "UserID": 1
+    }
+  },
+  "Self": {
+    "Active": false,
+    "Addrs": [],
+    "AllowedIPs": [
+      "100.64.0.10/32",
+      "fd7a:115c:a1e0::1001/128"
+    ],
+    "CapMap": {},
+    "Capabilities": [],
+    "Created": "2026-09-19T01:34:22.90815906Z",
+    "CurAddr": "",
+    "DNSName": "workstation.tailnet-example.ts.net.",
+    "ExitNode": false,
+    "ExitNodeOption": false,
+    "HostName": "workstation",
+    "ID": "1",
+    "InEngine": false,
+    "InMagicSock": false,
+    "InNetworkMap": true,
+    "KeyExpiry": "2027-03-18T01:34:22Z",
+    "LastHandshake": "0001-01-01T00:00:00Z",
+    "LastSeen": "0001-01-01T00:00:00Z",
+    "LastWrite": "0001-01-01T00:00:00Z",
+    "NoFileSharingReason": "",
+    "NodeID": 3069322967206501,
+    "OS": "windows",
+    "Online": true,
+    "PeerAPIURL": [
+      "http://100.64.0.10:40000",
+      "http://[fd7a:115c:a1e0::1001]:40001"
+    ],
+    "PeerRelay": "",
+    "PublicKey": "nodekey:0000000000000000000000000000000000000000000000000000000000000000",
+    "Relay": "",
+    "RxBytes": 0,
+    "TaildropTarget": 0,
+    "TailscaleIPs": [
+      "100.64.0.10",
+      "fd7a:115c:a1e0::1001"
+    ],
+    "TxBytes": 0,
+    "UserID": 1
+  },
+  "TailscaleIPs": [
+    "100.64.0.10",
+    "fd7a:115c:a1e0::1001"
+  ],
+  "User": {
+    "1": {
+      "DisplayName": "Example User",
+      "ID": 1,
+      "LoginName": "user@example.com",
+      "ProfilePicURL": ""
+    }
+  },
+  "Version": "1.80.0-t00000000"
+}

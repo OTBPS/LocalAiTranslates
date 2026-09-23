@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from .core import (
     CURRENT_CONFIG_VERSION,
     LANGUAGE_NAMES,
+    LOCAL_MODE,
     REMOTE_MODE,
     SOURCE_LANGUAGES,
     TARGET_LANGUAGES,
@@ -457,7 +458,11 @@ class Settings(QWidget):
         if self.c.busy or self.c.download_token:
             QMessageBox.information(self, "正在处理", "请先完成或取消当前任务")
             return False
-        previous = self.c.config.hotkey
+        # Distinct names on purpose: the except clause below restores the
+        # hotkey, and an earlier version rebound this name to the Config
+        # object further down, so a failure after that point crashed the
+        # error handler itself instead of reporting the error.
+        previous_hotkey = self.c.config.hotkey
         try:
             sequence = self.hotkey.keySequence().toString()
             self.c.hotkey.register(sequence)
@@ -473,9 +478,9 @@ class Settings(QWidget):
                 raise ValueError("请选择有效的翻译模型")
             remote_values = self.remote_card.values()
             set_startup(self.startup.isChecked())
-            previous = self.c.config
+            previous_config = self.c.config
             config = replace(
-                previous,
+                previous_config,
                 version=CURRENT_CONFIG_VERSION,
                 hotkey=sequence,
                 model_dir=str(path),
@@ -488,26 +493,26 @@ class Settings(QWidget):
             )
             config.save()
             runtime_changed = (
-                config.model_dir != previous.model_dir
-                or config.allow_cpu != previous.allow_cpu
-                or config.translation_model != previous.translation_model
-                or runtime_fields_changed(previous, config)
+                config.model_dir != previous_config.model_dir
+                or config.allow_cpu != previous_config.allow_cpu
+                or config.translation_model != previous_config.translation_model
+                or runtime_fields_changed(previous_config, config)
             )
-            source_changed = config.source_language != previous.source_language
+            source_changed = config.source_language != previous_config.source_language
             self.c.config = config
             if source_changed:
                 self.c.detected_source_language = None
             if runtime_changed:
                 # Rebuilding the backend already reconciles the host listener.
                 self.c.replace_engines()
-            elif service_fields_changed(previous, config):
+            elif service_fields_changed(previous_config, config):
                 self.c.apply_host_service()
             self.c.refresh_language_actions()
             self.set_status("已保存")
             self.refresh()
             return True
         except Exception as error:
-            self.c.hotkey.register(previous)
+            self.c.hotkey.register(previous_hotkey)
             QMessageBox.warning(self, "设置未保存", str(error))
             return False
 
@@ -551,7 +556,12 @@ class Settings(QWidget):
             != QMessageBox.StandardButton.Yes
         ):
             return
-        self.c.translator.stop()
+        # In remote mode `self.c.translator` is the remote port, whose stop()
+        # is a deliberate no-op, and no local server is holding the file open.
+        # Calling it would be harmless but says something untrue about what is
+        # happening, so the guard keeps the two modes honest.
+        if self.c.backend.kind == LOCAL_MODE:
+            self.c.translator.stop()
         backup = isolate_model_for_redownload(root, self.c.config.translation_model)
         if backup:
             self.set_status(f"当前模型已隔离至 {backup.relative_to(root)}")

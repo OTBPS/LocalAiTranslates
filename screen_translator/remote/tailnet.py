@@ -86,6 +86,13 @@ def parse_peer_route(document: object, peer_address: str) -> str:
 
     A relayed connection still works but pushes every screenshot through a
     DERP server, which is the usual explanation for a slow remote capture.
+
+    ``CurAddr`` is checked first and that order matters. ``Relay`` names the
+    peer's *home* DERP region and is populated even on a direct connection, so
+    reading it first reports every direct peer as relayed. Only a non-empty
+    ``CurAddr`` means traffic is actually flowing peer to peer. See
+    ``tests/data/tailscale_status.json`` for a recorded example of the two
+    fields being set at once.
     """
     if not isinstance(document, dict):
         return "unknown"
@@ -98,10 +105,10 @@ def parse_peer_route(document: object, peer_address: str) -> str:
         addresses = peer.get("TailscaleIPs")
         if not isinstance(addresses, list) or peer_address not in addresses:
             continue
-        if peer.get("Relay"):
-            return "relay"
         if peer.get("CurAddr"):
             return "direct"
+        if peer.get("Relay"):
+            return "relay"
         return "unknown"
     return "unknown"
 

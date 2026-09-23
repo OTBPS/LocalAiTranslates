@@ -16,7 +16,9 @@ models/
 Install test/
 backups/
 config/
-data/
+# Anchored to the repository root: an unanchored "data/" also swallowed
+# tests/data/, where recorded fixtures live.
+/data/
 logs/
 pytest-cache-files-*/
 training/cache/
