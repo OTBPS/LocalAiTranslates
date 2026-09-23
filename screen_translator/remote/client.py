@@ -27,8 +27,10 @@ from .protocol import (
     apply_translation,
     decode_ocr_result,
     decode_translation_result,
+    describe_version_mismatch,
     encode_translation_request,
     iter_events,
+    negotiate,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -61,6 +63,8 @@ class RemoteHealth:
     model_id: str = ""
     busy: bool = False
     detail: str = "尚未连接到远程主机"
+    #: The version both ends settled on, 0 while unreachable.
+    protocol: int = 0
 
     def describe(self) -> str:
         if not self.reachable:
@@ -160,13 +164,23 @@ class RemoteEndpoint:
             return RemoteHealth(detail="返回内容不是合法 JSON")
         if not isinstance(payload, dict):
             return RemoteHealth(detail="返回内容格式错误")
-        if payload.get("protocol") != PROTOCOL_VERSION:
+        # A host advertises everything it speaks; a v1 host advertises only
+        # "protocol". Take the best the two have in common rather than
+        # demanding equality, which is what made any version bump a flag
+        # day for both ends at once.
+        offered = payload.get("protocols") or [payload.get("protocol")]
+        agreed = max(
+            (version for version in (negotiate(item) for item in offered) if version),
+            default=None,
+        )
+        if agreed is None:
             return RemoteHealth(
                 reachable=True,
-                detail=f"协议版本不一致（远程 {payload.get('protocol')}，本机 {PROTOCOL_VERSION}）",
+                detail=describe_version_mismatch(payload.get("protocol")),
             )
         return RemoteHealth(
             reachable=True,
+            protocol=agreed,
             ready=bool(payload.get("ready")),
             device=str(payload.get("device") or UNLOADED_MODE),
             model_id=str(payload.get("model_id") or ""),

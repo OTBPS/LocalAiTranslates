@@ -10,6 +10,8 @@ from screen_translator.inference import REMOTE, InferenceBusy, InferenceCoordina
 from screen_translator.remote.access import AccessPolicy
 from screen_translator.remote.host import HostService
 from screen_translator.remote.protocol import (
+    PROTOCOL_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
     encode_translation_request,
     rebuild_block,
 )
@@ -90,7 +92,11 @@ def test_health_reports_protocol_model_and_device():
 
     health = service.health()
 
-    assert health["protocol"] == 1
+    assert health["protocol"] == PROTOCOL_VERSION
+    # Everything this host will also speak, so a client one version behind
+    # can settle on a common one instead of refusing outright.
+    assert health["protocols"] == list(SUPPORTED_PROTOCOL_VERSIONS)
+    assert 1 in health["protocols"], "v0.7.0 clients must keep working"
     assert health["ready"] is True
     assert health["device"] == "CUDA"
     assert health["model_id"] == "qwen3-14b-q5-k-m"

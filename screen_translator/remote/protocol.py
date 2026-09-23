@@ -19,7 +19,16 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 
 from ..core import OcrLine, OcrResult, TextBlock, TranslatedBlock
 
-PROTOCOL_VERSION = 1
+#: What this build sends and prefers.
+PROTOCOL_VERSION = 2
+#: What it will also speak, newest first. Both ends used to demand exact
+#: equality, so raising the number alone would have made every v1 install
+#: and every v2 install refuse each other -- which is why negotiation had
+#: to ship before the first feature that needed a new version.
+SUPPORTED_PROTOCOL_VERSIONS = (2, 1)
+#: The version assumed when a peer sends no version header at all. Only a
+#: v1 build does that.
+LEGACY_PROTOCOL_VERSION = 1
 
 # Bounds exist to keep a malicious or broken peer from exhausting host memory.
 # They are generous compared with a real screenshot selection.
@@ -40,6 +49,47 @@ _LANGUAGES = ("auto", "zh-Hans", "en", "ja", "ko")
 
 class ProtocolError(ValueError):
     """Raised when a peer sends a payload this version cannot accept."""
+
+
+def parse_version(value: object) -> int | None:
+    """Read a peer's advertised version. ``None`` means "unreadable"."""
+    if value is None:
+        return LEGACY_PROTOCOL_VERSION
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        # A version header is a small integer; anything else is either a
+        # broken peer or someone probing.
+        if text.isdigit() and len(text) <= 4:
+            return int(text)
+    return None
+
+
+def negotiate(peer_version: object, supported: Sequence[int] | None = None) -> int | None:
+    """The highest version both ends speak, or ``None`` if there is none.
+
+    A peer advertising something newer than anything here is answered at
+    this build's own best version rather than refused: a newer client is
+    required to be able to fall back, and refusing it would strand the
+    older side of a rolling upgrade.
+    """
+    # Read at call time, not bound as a default: a build's own set is a
+    # module fact, and tests need to stand in for an older one.
+    supported = tuple(supported if supported is not None else SUPPORTED_PROTOCOL_VERSIONS)
+    version = parse_version(peer_version)
+    if version is None:
+        return None
+    if version in supported:
+        return version
+    highest = max(supported)
+    return highest if version > highest else None
+
+
+def describe_version_mismatch(peer_version: object) -> str:
+    return f"协议版本不兼容（对方 {peer_version}，本机支持 {list(SUPPORTED_PROTOCOL_VERSIONS)}）"
 
 
 def _require(condition: object, message: str) -> None:

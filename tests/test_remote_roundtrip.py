@@ -323,18 +323,46 @@ def test_the_service_tells_the_policy_which_address_it_bound(host):
     assert host.remote.status.url == host.url
 
 
-def test_a_protocol_mismatch_names_both_versions(host, monkeypatch):
-    monkeypatch.setattr("screen_translator.remote.client.PROTOCOL_VERSION", 99)
+def test_a_version_neither_end_speaks_names_both_sides(host, monkeypatch):
+    # Not "one higher": a newer peer is answered at the host's best version
+    # so a rolling upgrade works. This is a version from another universe.
+    monkeypatch.setattr("screen_translator.remote.client.PROTOCOL_VERSION", 0)
     backend = RemoteBackend(host.url, SECRET)
 
     backend.refresh()
 
     # The host's own explanation reaches the user instead of "HTTP 400".
-    assert "协议版本不一致" in backend.describe()
-    with pytest.raises(RemoteError, match="协议版本不一致"):
+    assert "协议版本不兼容" in backend.describe()
+    with pytest.raises(RemoteError, match="协议版本不兼容"):
         backend.translator.translate(
             local_blocks(), CancellationToken(), lambda _t: None, "en", "zh-Hans", None
         )
+    backend.stop()
+
+
+def test_a_client_one_version_behind_still_works(host, monkeypatch):
+    """The reason negotiation had to ship before anything that needs v2.
+
+    Both ends used to demand exact equality, so a v2 host and a v0.7.0
+    client would have refused each other outright -- and a user who
+    updated one machine first would have had a broken pair with no way to
+    tell which half was wrong.
+    """
+    # A build that knows only version 1: it sends 1 and can accept only 1.
+    monkeypatch.setattr("screen_translator.remote.client.PROTOCOL_VERSION", 1)
+    monkeypatch.setattr(
+        "screen_translator.remote.protocol.SUPPORTED_PROTOCOL_VERSIONS", (1,)
+    )
+    backend = RemoteBackend(host.url, SECRET)
+
+    backend.refresh()
+
+    assert backend.ready(), backend.describe()
+    assert backend.health.current.protocol == 1
+    translated = backend.translator.translate(
+        local_blocks(), CancellationToken(), lambda _t: None, "en", "zh-Hans", None
+    )
+    assert [item.text for item in translated] == ["译[Hello]", "译[World]"]
     backend.stop()
 
 

@@ -39,12 +39,15 @@ from .protocol import (
     EVENT_RESULT,
     MAX_IMAGE_BYTES,
     PROTOCOL_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
     ProtocolError,
     decode_translation_request,
+    describe_version_mismatch,
     encode_event,
     encode_ocr_result,
     encode_translation_result,
     heartbeat,
+    negotiate,
 )
 from .tailnet import TailnetUnavailable, discover_address
 
@@ -126,6 +129,10 @@ class TranslationService:
         ready = bool(self._ready_provider())
         return {
             "protocol": PROTOCOL_VERSION,
+            # A v1 client reads only "protocol" and demands equality, so it
+            # will refuse a v2 host -- that is the version skew this list
+            # lets a v2 client survive.
+            "protocols": list(SUPPORTED_PROTOCOL_VERSIONS),
             "version": __version__,
             "ready": ready,
             "device": self._ocr_provider().mode,
@@ -355,13 +362,15 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.FORBIDDEN, {"error": REJECTION_MESSAGE})
             return False
         version = self.headers.get("X-Protocol-Version")
-        if version is not None and version != str(PROTOCOL_VERSION):
+        agreed = negotiate(version)
+        if agreed is None:
             self._drain_body()
             self._send_json(
-                HTTPStatus.BAD_REQUEST,
-                {"error": f"协议版本不一致（远程 {version}，本机 {PROTOCOL_VERSION}）"},
+                HTTPStatus.BAD_REQUEST, {"error": describe_version_mismatch(version)}
             )
             return False
+        # Kept for handlers that need to know what the peer can read back.
+        self.agreed_version = agreed
         return True
 
     def _read_body(self, limit: int) -> bytes | None:
