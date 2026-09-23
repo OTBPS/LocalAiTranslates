@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from screen_translator.design import components, metrics, primitives, semantic, typography
+from screen_translator.design import components, metrics, semantic, typography
 from screen_translator.design.primitives import contrast_ratio
 from screen_translator.design.qss import stylesheet
 
@@ -234,13 +234,6 @@ def test_the_retired_direction_is_still_reachable_for_a_revert():
     assert metrics.FLAT.radius_card == 0
 
 
-def test_the_overlay_palette_is_pinned_rather_than_themed():
-    from screen_translator.design import overlay
-
-    # It paints on an unknown screenshot; the application's light or dark
-    # mode says nothing about the region the user grabbed.
-    assert overlay.PINNED.selection == primitives.PAPER["red"]
-    assert not hasattr(overlay, "theme_for")
 
 
 def test_the_token_document_matches_the_code():
@@ -272,3 +265,48 @@ def test_every_adr_referenced_by_the_master_document_exists():
 
     for link in re.findall(r"\]\((decisions/[\w-]+\.md)\)", master):
         assert (base / link).is_file(), link
+
+
+def test_graphics_never_imports_the_design_package():
+    """Rendering a translated picture must not depend on the theme.
+
+    `graphics.py` picks its two inks per image from the measured
+    luminance of the patch behind the text, and `FONT_FAMILIES` maps a
+    language to a system font -- neither is a brand choice. If they went
+    under a theme, changing the application's appearance would change
+    the pixels of a picture the user saved. This exists because
+    unifying colour handling looks like tidy-up.
+    """
+    tree = ast.parse((PACKAGE / "graphics.py").read_text(encoding="utf-8"))
+    imported = {
+        (node.module or "")
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+    } | {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+
+    assert not any("design" in name for name in imported), sorted(imported)
+
+
+def test_the_overlay_palette_moved_with_the_direction_but_not_with_the_theme():
+    from screen_translator.design import overlay, semantic
+
+    # Pinned against light and dark, not against the visual direction:
+    # it paints on an unknown screenshot, so the system appearance says
+    # nothing about the region the user grabbed.
+    assert overlay.PINNED.selection == semantic.LIGHT.accent_text
+    assert overlay.PINNED.selection != semantic.CONSTRUCTIVIST.accent_fill
+    assert not hasattr(overlay, "theme_for")
+
+
+def test_the_overlay_capsule_is_translucent_so_the_blur_shows_through():
+    from screen_translator.design import overlay
+
+    # An opaque bar would make the blur underneath pointless, which is
+    # the failure mode of "glass" that is really a texture.
+    assert overlay.PINNED.capsule_fill[3] < 255
+    assert overlay.PINNED.capsule_highlight[3] < 255

@@ -22,18 +22,24 @@ and nothing behind it can change while the overlay is on screen. So the
 region the status bar covers can be blurred once and composited, which is
 real refraction rather than a picture of one.
 
-```python
-def glass_backdrop(image: QImage, region: QRect, radius: int = 24) -> QImage:
-    """Blur and lighten the strip the status bar covers, once per capture."""
-```
+`graphics.blurred_region` does the blur by scaling the strip down and
+back up with smooth filtering — a cheap Gaussian approximation that needs
+no extra dependency and no numpy round trip. `ScreenShot.backdrop(region)`
+caches the result per region.
 
-**It must be computed when the screenshot is taken and cached on
-`ScreenShot`, never inside `paintEvent`.** `paintEvent` runs ten times a
-second while the model works. A Gaussian blur there would make the overlay
-unusable. This is written here, and in a comment at the call site, because
+**The cache is the whole point.** `paintEvent` runs ten times a second
+while the model works; a blur there would make the overlay unusable. The
+cache lives on `ScreenShot` because that is the object whose lifetime
+matches the frozen image — one entry per capture, per screen, per bar
+size. This is written here and in a comment at the call site, because
 moving a pure function into the paint path looks like a tidy-up.
 
-The cost as specified is one blur of roughly 820 × 58 pixels per capture.
+The cost is one blur of roughly 820 × 58 pixels per capture.
+
+Composited on top: a translucent white fill so the blur shows through, a
+1 px top stroke as the static stand-in for a specular highlight, and a
+hairline border. The highlight cannot respond to the background, for the
+reason in ADR 0002.
 
 ## What does not get glass
 

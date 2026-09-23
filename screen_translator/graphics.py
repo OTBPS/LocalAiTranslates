@@ -1,9 +1,29 @@
-from dataclasses import dataclass
+"""Pixels: screen capture, text fitting, and rendering the translation.
+
+**This module is deliberately outside the design token system.** Its two
+ink colours are chosen per image from the measured luminance of the
+patch behind the text, not from a theme, and `FONT_FAMILIES` maps a
+language to a system font rather than naming a brand stack. Putting
+either under a theme would mean changing the application's appearance
+changed the pixels of a translated picture the user saved.
+`test_graphics_never_imports_the_design_package` keeps that separation
+from being tidied away by someone unifying colour handling.
+"""
+
+from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
 from PySide6.QtCore import QRect, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter
+
+#: The two inks the renderer picks between, by measured background
+#: luminance. Named rather than inline, and excluded from the token
+#: system for the reason in the module docstring.
+INK_ON_LIGHT = "#161b22"
+INK_ON_DARK = "#ffffff"
+#: Above this mean channel value the patch counts as light.
+LIGHT_BACKGROUND_MEAN = 125
 
 
 def to_array(image):
@@ -38,6 +58,50 @@ class ScreenShot:
     geometry: QRect
     image: QImage
     scale: float
+    #: Blurred strips of this frozen image, keyed by the region they
+    #: cover. See `blurred_region` for why they are cached here.
+    glass: dict = field(default_factory=dict)
+
+    def backdrop(self, region: QRect) -> QImage:
+        """The blurred strip behind `region`, computed at most once.
+
+        The screenshot does not change while the overlay is on screen,
+        so a real blur of it can be reused. Doing this in `paintEvent`
+        instead would run it ten times a second during processing and
+        make the overlay unusable -- see ADR 0005.
+        """
+        key = (region.x(), region.y(), region.width(), region.height())
+        if key not in self.glass:
+            self.glass[key] = blurred_region(self.image, region)
+        return self.glass[key]
+
+
+def blurred_region(image: QImage, region: QRect, *, factor: int = 10) -> QImage:
+    """Blur one rectangle of an image by scaling it down and back up.
+
+    Genuine refraction rather than a texture: it samples the content
+    actually behind the bar. Down-and-up smooth scaling is a cheap
+    Gaussian approximation that needs no extra dependency and no numpy
+    round trip, which matters because this is the only place in the
+    project where a background filter is achievable at all.
+    """
+    if image is None or region.isEmpty():
+        return QImage()
+    patch = image.copy(region)
+    if patch.isNull():
+        return QImage()
+    small = patch.scaled(
+        max(1, patch.width() // factor),
+        max(1, patch.height() // factor),
+        Qt.AspectRatioMode.IgnoreAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    return small.scaled(
+        patch.width(),
+        patch.height(),
+        Qt.AspectRatioMode.IgnoreAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
 
 
 @dataclass
@@ -184,7 +248,13 @@ class OverlayRenderer:
                     painter.setPen(Qt.PenStyle.NoPen)
                     painter.setBrush(QColor(*[int(v) for v in background], 245))
                     painter.drawRoundedRect(rect, 3, 3)
-                painter.setPen(QColor("#161b22") if background.mean() > 125 else QColor("#ffffff"))
+                painter.setPen(
+                    QColor(
+                        INK_ON_LIGHT
+                        if background.mean() > LIGHT_BACKGROUND_MEAN
+                        else INK_ON_DARK
+                    )
+                )
                 painter.setFont(font)
                 painter.drawText(
                     rect,

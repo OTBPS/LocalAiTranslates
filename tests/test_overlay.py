@@ -314,15 +314,29 @@ def test_the_size_badge_sits_above_the_selection_when_there_is_room():
         overlay.close()
 
 
-def test_the_cursor_is_painted_rather_than_left_to_windows():
+@pytest.mark.parametrize("background", ["#FFFFFF", "#000000", "#808080"])
+def test_the_cursor_is_visible_on_any_background(background):
+    """It is drawn on an unknown screenshot, so it cannot assume one.
+
+    Painted rather than left to Windows because native cross cursors
+    flicker while ownership moves between full-screen overlays.
+    """
     image = QImage(60, 60, QImage.Format.Format_RGB32)
-    image.fill(QColor("#FFFFFF"))
+    image.fill(QColor(background))
     painter = QPainter(image)
     draw_selection_cursor(painter, QPoint(30, 30))
     painter.end()
 
-    assert image.pixelColor(30, 30) != QColor("#FFFFFF")
-    assert image.pixelColor(30, 15) != QColor("#FFFFFF")
+    # Both arms and the centre have to differ from the background
+    # somewhere, which is what the dark stroke under the light one is
+    # for: neither colour alone works over every screenshot.
+    for x, y in ((30, 30), (30, 14), (14, 30), (46, 30), (30, 46)):
+        patch = {
+            image.pixelColor(x + dx, y + dy).name()
+            for dx in (-2, 0, 2)
+            for dy in (-2, 0, 2)
+        }
+        assert patch != {QColor(background).name()}, f"invisible at {(x, y)}"
 
 
 def test_the_interaction_cursor_follows_the_stage():
@@ -346,3 +360,49 @@ def test_moving_the_mouse_keeps_the_painted_cursor_in_step():
         assert controller.cursor_point != QPoint(0, 0)
     finally:
         overlay.close()
+
+
+def test_the_status_bar_blurs_what_is_actually_behind_it():
+    """The one place in the project where real glass is achievable.
+
+    The screenshot is frozen, so the strip behind the bar can be blurred
+    and composited. See ADR 0005.
+    """
+    image = QImage(300, 200, QImage.Format.Format_RGB888)
+    for x in range(300):
+        for y in range(200):
+            # Sharp vertical stripes: a blur has to smear them.
+            image.setPixelColor(x, y, QColor("#000000" if (x // 4) % 2 else "#FFFFFF"))
+    shot = ScreenShot(SIZE, image, 1)
+    overlay, _controller, _holder = build(model_for(SessionState.PROCESSING))
+    overlay.screen = shot
+    try:
+        bar = overlay._capsule_rect()
+        backdrop = shot.backdrop(bar)
+
+        assert not backdrop.isNull()
+        shades = {backdrop.pixelColor(x, 20).name() for x in range(0, backdrop.width(), 3)}
+        # Neither pure black nor pure white survives a blur of stripes.
+        assert shades - {"#000000", "#ffffff"}, "nothing was blurred"
+    finally:
+        overlay.close()
+
+
+def test_the_blur_is_computed_once_rather_than_every_repaint():
+    """paintEvent runs ten times a second while the model works."""
+    image = QImage(300, 200, QImage.Format.Format_RGB888)
+    image.fill(QColor("#4488CC"))
+    shot = ScreenShot(SIZE, image, 1)
+    region = QRect(10, 10, 200, 40)
+
+    first = shot.backdrop(region)
+    second = shot.backdrop(region)
+
+    assert first is second, "a fresh blur on every paint would be unusable"
+    assert len(shot.glass) == 1
+
+
+def test_a_capture_with_no_image_does_not_crash_the_glass():
+    shot = ScreenShot(SIZE, None, 1)
+
+    assert shot.backdrop(QRect(0, 0, 10, 10)).isNull()

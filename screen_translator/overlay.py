@@ -6,8 +6,8 @@ reaches into the other, which is what lets the capture flow be tested
 without a window and the visuals be replaced without touching the flow.
 """
 
-from PySide6.QtCore import QPoint, QRect, Qt, QTimer
-from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPen
+from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer
+from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QMenu, QWidget
 
 from .capture import CaptureCommand, Handle, state_label
@@ -23,7 +23,10 @@ CAPSULE_HEIGHT = 78
 BADGE_HEIGHT = 28
 BADGE_GAP = 10
 EDGE_MARGIN = 12
-SELECTION_WIDTH = 4
+SELECTION_WIDTH = 2
+CAPSULE_RADIUS = 18
+BADGE_RADIUS = 8
+STATE_RADIUS = 8
 
 _ARROW_KEYS = {
     Qt.Key.Key_Left: (-1, 0),
@@ -162,19 +165,21 @@ class Overlay(QWidget):
         painter.setPen(QPen(QColor(PALETTE.selection), SELECTION_WIDTH))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(region)
-        painter.setPen(QPen(QColor(PALETTE.handle_border), 2))
+        # Round handles: they are grab targets, and a circle reads as one
+        # at a glance where a square reads as decoration.
+        painter.setPen(QPen(QColor(PALETTE.handle_border), SELECTION_WIDTH))
         painter.setBrush(QColor(PALETTE.handle_fill))
         for _handle, box in model.handles:
-            painter.drawRect(self.local(box))
+            painter.drawEllipse(self.local(box))
 
         badge_text = model.badge
         if not badge_text:
             return
         width = painter.fontMetrics().horizontalAdvance(badge_text) + 24
         badge = self._badge_rect(region, width, model)
-        painter.setPen(QPen(QColor(PALETTE.badge_text), 2))
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(PALETTE.badge_fill))
-        painter.drawRect(badge)
+        painter.drawRoundedRect(badge, BADGE_RADIUS, BADGE_RADIUS)
         painter.setPen(QColor(PALETTE.badge_text))
         painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, badge_text)
 
@@ -199,6 +204,37 @@ class Overlay(QWidget):
         y = min(y, self.height() - BADGE_HEIGHT - EDGE_MARGIN)
         return QRect(x, y, width, BADGE_HEIGHT)
 
+    def _paint_glass(self, painter, bar) -> None:
+        """The one real glass surface in the application.
+
+        The screenshot behind the bar is frozen, so it can be blurred
+        once and composited -- genuine refraction rather than a texture.
+        Everywhere else in Qt this is unreachable; see ADR 0005 and the
+        Constraints section of MASTER.md.
+
+        The blur is cached on the `ScreenShot`. Computing it here would
+        run a full blur ten times a second while the model works.
+        """
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(bar), CAPSULE_RADIUS, CAPSULE_RADIUS)
+        painter.save()
+        painter.setClipPath(path)
+        backdrop = self.screen.backdrop(bar)
+        if not backdrop.isNull():
+            painter.drawImage(bar, backdrop)
+        painter.fillRect(bar, QColor(*PALETTE.capsule_fill))
+        painter.restore()
+        # A 1 px top stroke: the static stand-in for a specular edge,
+        # which cannot respond to the background because nothing in Qt
+        # can sample it.
+        painter.setPen(QPen(QColor(*PALETTE.capsule_highlight), 1))
+        painter.drawLine(
+            bar.left() + CAPSULE_RADIUS, bar.top() + 1, bar.right() - CAPSULE_RADIUS, bar.top() + 1
+        )
+        painter.setPen(QPen(QColor(PALETTE.capsule_border), 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(bar, CAPSULE_RADIUS, CAPSULE_RADIUS)
+
     def _paint_capsule(self, painter, model):
         self.phase += 1
         detail = model.message
@@ -211,15 +247,13 @@ class Overlay(QWidget):
         # hint used to share one line and was overwritten by progress text
         # exactly when the wait was longest.
         bar = self._capsule_rect()
-        painter.setPen(QPen(QColor(PALETTE.capsule_border), 3))
-        painter.setBrush(QColor(*PALETTE.capsule_fill))
-        painter.drawRect(bar)
+        self._paint_glass(painter, bar)
 
-        state_rect = QRect(bar.left() + 10, bar.top() + 10, 92, 38)
+        state_rect = QRect(bar.left() + 12, bar.top() + 10, 92, 38)
         colour = QColor(_STATE_COLOURS.get(model.state, PALETTE.capsule_text))
-        painter.setPen(QPen(QColor(PALETTE.capsule_border), 2))
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(colour)
-        painter.drawRect(state_rect)
+        painter.drawRoundedRect(state_rect, STATE_RADIUS, STATE_RADIUS)
         painter.setPen(QColor(_label_colour(colour)))
         heading = QFont("Microsoft YaHei UI", 10)
         heading.setWeight(QFont.Weight.Black)
