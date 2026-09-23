@@ -77,20 +77,21 @@ class Settings(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
-        scroll = QScrollArea()
-        self.scroll = scroll
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        content = QWidget()
-        content.setObjectName("scrollContent")
-        layout = QVBoxLayout(content)
+        # The header, the banner and the tab bar do not scroll; each page
+        # scrolls inside itself. One scroll area around everything made
+        # `QTabWidget` impose the tallest page's minimum height on all of
+        # them -- the system page needs 819 px, so the text page was
+        # forced to 808 and its Translate button fell below the fold at
+        # the default window size.
+        chrome = QWidget()
+        chrome.setObjectName("scrollContent")
+        layout = QVBoxLayout(chrome)
         layout.setContentsMargins(
-            SIZES.space_page, SIZES.space_section, SIZES.space_page, SIZES.space_page
+            SIZES.space_page, SIZES.space_section, SIZES.space_page, 0
         )
         layout.setSpacing(SIZES.space_card)
-        scroll.setWidget(content)
-        outer.addWidget(scroll)
+        outer.addWidget(chrome, 1)
+        self._scrolls: list[QScrollArea] = []
 
         self.header = AppHeader("屏译")
         layout.addWidget(self.header)
@@ -366,11 +367,30 @@ class Settings(QWidget):
         self.navigate(Destination.CAPTURE_LANGUAGES)
 
     def make_page(self):
+        """A tab page that scrolls on its own.
+
+        Returning the scroll area rather than the bare page is what
+        keeps each workspace's length to itself: a long page scrolls,
+        and a short one does not inherit its neighbour's minimum.
+        """
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         page = QWidget()
+        page.setObjectName("scrollContent")
         page_layout = QVBoxLayout(page)
-        page_layout.setContentsMargins(0, SIZES.space_card, 0, 0)
+        page_layout.setContentsMargins(0, SIZES.space_card, 0, SIZES.space_page)
         page_layout.setSpacing(SIZES.space_card)
-        return page, page_layout
+        scroll.setWidget(page)
+        self._scrolls.append(scroll)
+        return scroll, page_layout
+
+    @property
+    def scroll(self) -> QScrollArea:
+        """The scroll area of the tab currently on show."""
+        index = self.tabs.currentIndex() if hasattr(self, "tabs") else 0
+        return self._scrolls[index if 0 <= index < len(self._scrolls) else 0]
 
     def confirm(self, request: ConfirmationRequest) -> bool:
         """`ConfirmationPort` implementation.

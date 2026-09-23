@@ -60,3 +60,10 @@ They were its real gain and survive the change of visual language.)*
 - Usable down to 680 × 600, reflowing vertically by scrolling. The larger
   Liquid-Glass padding makes this tighter than before, so it is a
   pre-delivery check rather than an assumption.
+- **Each tab scrolls inside itself; the header, the banner and the tab bar
+  do not.** One scroll area around everything made `QTabWidget` apply the
+  tallest page's minimum height to all of them, so the short pages were
+  stretched to the long one's length. At the *default* window size — not
+  merely the smallest — that pushed the text page's Translate button below
+  the fold. A page's primary action has to be reachable without scrolling
+  at the size the window actually opens at.

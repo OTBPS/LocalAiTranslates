@@ -49,6 +49,9 @@ All notable user-visible changes are recorded here. Versions follow semantic ver
   opaque window instead, with nothing else changed.
 - Every disabled control keeps its reason, and the focus ring no longer shifts a control by a pixel
   when it appears.
+- Each settings tab now scrolls on its own. The text page's Translate button used to sit below the
+  fold at the default window size, because a single scroll area gave every tab the longest page's
+  height; the capture page also carried a large stretch of empty space for the same reason.
 - Scrolling the settings page no longer changes a dropdown or the listen port on the way past. The
   selection changes by clicking and picking from the list; the list itself still scrolls once it is
   open, and the page still scrolls when the cursor is over a dropdown.

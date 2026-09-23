@@ -187,6 +187,72 @@ def test_nothing_overflows_the_window(qt_app, tmp_path, width, height, tab):
         view.close()
 
 
+def test_each_tab_scrolls_on_its_own(qt_app, tmp_path):
+    """One scroll area around everything let the longest page rule.
+
+    `QTabWidget.minimumSizeHint` is the maximum over its pages, so a
+    single outer scroll area gave every tab the system page's minimum
+    -- 819 px. The text page needs 525 and was stretched to 808, which
+    pushed its Translate button below the fold at the *default* window
+    size, not merely the smallest one.
+    """
+    view = window(qt_app, semantic.ACTIVE, metrics.ACTIVE, tmp_path)
+    try:
+        view.resize(820, 840)
+        view.show()
+        lengths = {}
+        for tab in range(view.tabs.count()):
+            view.tabs.setCurrentIndex(tab)
+            qt_app.processEvents()
+            lengths[tab] = view.scroll.verticalScrollBar().maximum()
+
+        # The system page is genuinely long and must scroll; the other
+        # two must not inherit that.
+        assert lengths[0] == 0, f"the capture page should fit: {lengths}"
+        assert lengths[1] == 0, f"the text page should fit: {lengths}"
+        assert lengths[2] > 0, "the system page is long enough to scroll"
+    finally:
+        view.close()
+
+
+def test_the_primary_action_of_each_page_is_reachable_without_scrolling(qt_app, tmp_path):
+    """At the default window size. The minimum size may scroll; the
+    default is what a user actually opens."""
+    view = window(qt_app, semantic.ACTIVE, metrics.ACTIVE, tmp_path)
+    try:
+        view.resize(820, 840)
+        view.show()
+        view.tabs.setCurrentIndex(1)
+        qt_app.processEvents()
+
+        button = view.text_page.translate_button
+        viewport = view.scroll.viewport()
+        bottom = button.mapTo(viewport, button.rect().bottomRight()).y()
+
+        assert bottom <= viewport.height(), (
+            f"Translate ends at {bottom} in a {viewport.height()}px viewport"
+        )
+    finally:
+        view.close()
+
+
+def test_the_banner_and_header_do_not_scroll_away(qt_app, tmp_path):
+    """The banner reports on a footer button shared by every tab.
+
+    It sits outside the tabs so a confirmation is visible from all of
+    them; putting it inside a scroll area would let it leave the screen
+    instead, which is the same bug in a new place.
+    """
+    view = window(qt_app, semantic.ACTIVE, metrics.ACTIVE, tmp_path)
+    try:
+        for scroll in view._scrolls:
+            assert not scroll.isAncestorOf(view.banner)
+            assert not scroll.isAncestorOf(view.header)
+            assert not scroll.isAncestorOf(view.tabs)
+    finally:
+        view.close()
+
+
 def test_every_focusable_control_has_an_accessible_name(qt_app, tmp_path):
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QComboBox, QLineEdit, QPushButton
