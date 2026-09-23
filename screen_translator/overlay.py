@@ -1,6 +1,41 @@
+"""The full-screen capture chrome.
+
+Painting is driven entirely by an ``OverlayViewModel``; input is translated
+into ``CaptureCommand`` values and handed to the controller. Neither side
+reaches into the other, which is what lets the capture flow be tested
+without a window and the visuals be replaced without touching the flow.
+"""
+
 from PySide6.QtCore import QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QWidget
+
+from .capture import CaptureCommand, Handle, state_label
+from .session import SessionState
+
+ANIMATION_INTERVAL_MS = 100
+NUDGE_STEP = 1
+NUDGE_STEP_LARGE = 10
+CAPSULE_TOP = 18
+CAPSULE_HEIGHT = 78
+BADGE_HEIGHT = 28
+BADGE_GAP = 10
+EDGE_MARGIN = 12
+
+_ARROW_KEYS = {
+    Qt.Key.Key_Left: (-1, 0),
+    Qt.Key.Key_Right: (1, 0),
+    Qt.Key.Key_Up: (0, -1),
+    Qt.Key.Key_Down: (0, 1),
+}
+
+_STATE_COLOURS = {
+    SessionState.SELECTING: "#C51D23",
+    SessionState.ADJUSTING: "#C51D23",
+    SessionState.PROCESSING: "#E8BC35",
+    SessionState.RESULT: "#C51D23",
+    SessionState.FAILED: "#C51D23",
+}
 
 
 def draw_selection_cursor(painter: QPainter, point: QPoint) -> None:
@@ -27,9 +62,9 @@ def draw_selection_cursor(painter: QPainter, point: QPoint) -> None:
 
 
 class Overlay(QWidget):
-    def __init__(self, controller, screen):
+    def __init__(self, controller, screen, index=0):
         super().__init__()
-        self.controller, self.screen = controller, screen
+        self.controller, self.screen, self.index = controller, screen, index
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
         )
@@ -41,137 +76,242 @@ class Overlay(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update)
-        self.timer.start(100)
         self.phase = 0
 
-    def paintEvent(self, event):
-        c = self.controller
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        p.drawImage(self.rect(), self.screen.image)
-        if c.state == "selecting":
-            p.fillRect(self.rect(), QColor(21, 21, 21, 138))
-            if c.selection:
-                region = c.selection.translated(-self.screen.geometry.topLeft())
-                p.save()
-                p.setClipRect(region)
-                p.drawImage(self.rect(), self.screen.image)
-                p.restore()
-                p.setPen(QPen(QColor("#C51D23"), 4))
-                p.drawRect(region)
-                p.setPen(QPen(QColor("#151515"), 2))
-                p.setBrush(QColor("#E8BC35"))
-                for corner in (
-                    region.topLeft(),
-                    region.topRight(),
-                    region.bottomLeft(),
-                    region.bottomRight(),
-                ):
-                    p.drawRect(QRect(corner.x() - 5, corner.y() - 5, 10, 10))
-                size_text = f"{c.selection.width()} × {c.selection.height()}"
-                metrics = p.fontMetrics()
-                badge_width = metrics.horizontalAdvance(size_text) + 24
-                badge_x = max(12, min(region.left(), self.width() - badge_width - 12))
-                badge_y = region.top() - 38 if region.top() >= 92 else region.top() + 10
-                badge = QRect(badge_x, badge_y, badge_width, 28)
-                p.setPen(QPen(QColor("#151515"), 2))
-                p.setBrush(QColor("#E8BC35"))
-                p.drawRect(badge)
-                p.setPen(QColor("#151515"))
-                p.drawText(badge, Qt.AlignmentFlag.AlignCenter, size_text)
-        elif c.state == "result" and c.show_translation:
-            region = c.capture.logical_rect.translated(-self.screen.geometry.topLeft())
-            p.drawImage(region, c.result)
+    # -- painting --------------------------------------------------------
 
-        self.phase += 1
-        label = c.message
-        if c.state == "working":
-            label += "." * (self.phase % 4)
-        if c.state == "selecting":
-            state_text, state_color = "选择区域", QColor("#C51D23")
-        elif c.state == "working":
-            state_text, state_color = "正在处理", QColor("#E8BC35")
-        elif c.state == "result" and c.show_translation:
-            state_text, state_color = "译文", QColor("#C51D23")
-        else:
-            state_text, state_color = "原图", QColor("#151515")
-        if c.state == "result" and hasattr(c, "language_pair_text"):
-            label = f"{c.language_pair_text()}  ·  {label}"
+    def model(self):
+        return self.controller.overlay_model()
 
-        bar_width = max(220, min(820, self.width() - 32))
-        bar = QRect((self.width() - bar_width) // 2, 18, bar_width, 58)
-        p.setPen(QPen(QColor("#151515"), 3))
-        p.setBrush(QColor(243, 233, 210, 246))
-        p.drawRect(bar)
-        state_rect = QRect(bar.left() + 10, bar.top() + 10, 92, 38)
-        p.setPen(QPen(QColor("#151515"), 2))
-        p.setBrush(state_color)
-        p.drawRect(state_rect)
-        p.setPen(QColor("#FFFFFF") if state_color == QColor("#C51D23") else QColor("#151515"))
-        state_font = QFont("Microsoft YaHei UI", 10)
-        state_font.setWeight(QFont.Weight.Black)
-        p.setFont(state_font)
-        p.drawText(state_rect, Qt.AlignmentFlag.AlignCenter, state_text)
-        detail_rect = QRect(
-            state_rect.right() + 14, bar.top(), bar.right() - state_rect.right() - 26, bar.height()
+    def local(self, rect):
+        origin = self.screen.geometry.topLeft()
+        return QRect(
+            rect.x - origin.x(), rect.y - origin.y(), rect.width, rect.height
         )
-        detail_font = QFont("Microsoft YaHei UI", 10)
-        p.setFont(detail_font)
-        p.setPen(QColor("#151515"))
-        detail = p.fontMetrics().elidedText(label, Qt.TextElideMode.ElideRight, max(20, detail_rect.width()))
-        p.drawText(detail_rect, Qt.AlignmentFlag.AlignVCenter, detail)
-        if c.state == "selecting":
-            global_point = getattr(c, "cursor_point", QCursor.pos())
-            if self.screen.geometry.contains(global_point):
-                draw_selection_cursor(p, global_point - self.screen.geometry.topLeft())
-        p.end()
+
+    def paintEvent(self, event):
+        model = self.model()
+        # Only PROCESSING animates; leaving the timer running in the result
+        # state repainted every screen ten times a second for nothing.
+        if model.animated and not self.timer.isActive():
+            self.timer.start(ANIMATION_INTERVAL_MS)
+        elif not model.animated and self.timer.isActive():
+            self.timer.stop()
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.drawImage(self.rect(), self.screen.image)
+        if model.state in (SessionState.SELECTING, SessionState.ADJUSTING):
+            self._paint_selection(painter, model)
+        elif model.state == SessionState.RESULT and model.show_translation and model.result:
+            painter.drawImage(self.local(model.result_rect), model.result)
+        elif model.state == SessionState.FAILED and model.selection:
+            self._paint_selection(painter, model, dim=False)
+
+        if self.index == model.capsule_screen:
+            self._paint_capsule(painter, model)
+        if model.state in (SessionState.SELECTING, SessionState.ADJUSTING) and model.cursor:
+            point = QPoint(*model.cursor)
+            if self.screen.geometry.contains(point):
+                draw_selection_cursor(painter, point - self.screen.geometry.topLeft())
+        painter.end()
+
+    def _paint_selection(self, painter, model, *, dim=True):
+        if dim:
+            painter.fillRect(self.rect(), QColor(21, 21, 21, 138))
+        if model.selection is None:
+            return
+        region = self.local(model.selection)
+        if dim:
+            painter.save()
+            painter.setClipRect(region)
+            painter.drawImage(self.rect(), self.screen.image)
+            painter.restore()
+        painter.setPen(QPen(QColor("#C51D23"), 4))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(region)
+        painter.setPen(QPen(QColor("#151515"), 2))
+        painter.setBrush(QColor("#E8BC35"))
+        for _handle, box in model.handles:
+            painter.drawRect(self.local(box))
+
+        badge_text = model.badge
+        if not badge_text:
+            return
+        width = painter.fontMetrics().horizontalAdvance(badge_text) + 24
+        badge = self._badge_rect(region, width, model)
+        painter.setPen(QPen(QColor("#151515"), 2))
+        painter.setBrush(QColor("#E8BC35"))
+        painter.drawRect(badge)
+        painter.setPen(QColor("#151515"))
+        painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, badge_text)
+
+    def _capsule_rect(self):
+        bar_width = max(220, min(820, self.width() - 32))
+        return QRect((self.width() - bar_width) // 2, CAPSULE_TOP, bar_width, CAPSULE_HEIGHT)
+
+    def _badge_rect(self, region, width, model):
+        """Above the selection when there is room, inside it otherwise.
+
+        "Room" has to account for the capsule, which is painted afterwards
+        and therefore on top: the badge used to be measured against the top
+        of the screen alone and slid under the status bar for any selection
+        starting in the upper third.
+        """
+        x = max(EDGE_MARGIN, min(region.left(), self.width() - width - EDGE_MARGIN))
+        floor = 0
+        if self.index == model.capsule_screen:
+            floor = self._capsule_rect().bottom() + BADGE_GAP
+        above = region.top() - BADGE_HEIGHT - BADGE_GAP
+        y = above if above >= floor else max(region.top() + BADGE_GAP, floor)
+        y = min(y, self.height() - BADGE_HEIGHT - EDGE_MARGIN)
+        return QRect(x, y, width, BADGE_HEIGHT)
+
+    def _paint_capsule(self, painter, model):
+        self.phase += 1
+        detail = model.message
+        if model.state == SessionState.PROCESSING and detail:
+            detail += "." * (self.phase % 4)
+        if model.state == SessionState.RESULT:
+            detail = f"{model.language_pair}  ·  {detail}" if detail else model.language_pair
+
+        # Two rows: what is happening, and what can be done about it. The
+        # hint used to share one line and was overwritten by progress text
+        # exactly when the wait was longest.
+        bar = self._capsule_rect()
+        painter.setPen(QPen(QColor("#151515"), 3))
+        painter.setBrush(QColor(243, 233, 210, 246))
+        painter.drawRect(bar)
+
+        state_rect = QRect(bar.left() + 10, bar.top() + 10, 92, 38)
+        colour = QColor(_STATE_COLOURS.get(model.state, "#151515"))
+        painter.setPen(QPen(QColor("#151515"), 2))
+        painter.setBrush(colour)
+        painter.drawRect(state_rect)
+        painter.setPen(QColor("#FFFFFF") if colour == QColor("#C51D23") else QColor("#151515"))
+        heading = QFont("Microsoft YaHei UI", 10)
+        heading.setWeight(QFont.Weight.Black)
+        painter.setFont(heading)
+        painter.drawText(state_rect, Qt.AlignmentFlag.AlignCenter, state_label(model))
+
+        body = QFont("Microsoft YaHei UI", 10)
+        painter.setFont(body)
+        painter.setPen(QColor("#151515"))
+        text_left = state_rect.right() + 14
+        width = bar.right() - text_left - 12
+        if detail:
+            rect = QRect(text_left, bar.top() + 8, width, 24)
+            painter.drawText(
+                rect,
+                Qt.AlignmentFlag.AlignVCenter,
+                painter.fontMetrics().elidedText(detail, Qt.TextElideMode.ElideRight, max(20, width)),
+            )
+        hint_rect = QRect(text_left, bar.top() + (34 if detail else 20), width, 24)
+        painter.setPen(QColor("#514B40"))
+        painter.drawText(
+            hint_rect,
+            Qt.AlignmentFlag.AlignVCenter,
+            painter.fontMetrics().elidedText(model.hint, Qt.TextElideMode.ElideRight, max(20, width)),
+        )
 
     def set_interaction_state(self, state: str) -> None:
-        if state == "selecting":
-            self.setCursor(Qt.CursorShape.BlankCursor)
-        elif state == "working":
+        if state == "working":
             self.setCursor(Qt.CursorShape.WaitCursor)
-        else:
+        elif state == "result":
             self.setCursor(Qt.CursorShape.ArrowCursor)
+        else:
+            self.setCursor(Qt.CursorShape.BlankCursor)
+
+    # -- input -----------------------------------------------------------
 
     def enterEvent(self, event):
-        if self.controller.state == "selecting":
-            self.controller.cursor_point = QCursor.pos()
-            self.controller.repaint()
+        self.controller.cursor_point = QCursor.pos()
+        self.controller.repaint()
         super().enterEvent(event)
 
     def mousePressEvent(self, event):
-        c = self.controller
-        if event.button() == Qt.MouseButton.RightButton and c.state == "result":
-            c.show_result_language_menu(self, event.globalPosition().toPoint())
+        point = event.globalPosition().toPoint()
+        self.controller.cursor_point = point
+        if event.button() == Qt.MouseButton.RightButton:
+            self.controller.show_result_menu(self, point)
             return
         if event.button() != Qt.MouseButton.LeftButton:
             return
-        if c.state == "result":
-            c.show_translation = not c.show_translation
-            c.repaint()
-        elif c.state == "selecting":
-            c.start_point = event.globalPosition().toPoint()
-            c.selection = QRect(c.start_point, c.start_point)
+        model = self.model()
+        if model.allows(CaptureCommand.TOGGLE_VIEW):
+            self.controller.handle(CaptureCommand.TOGGLE_VIEW)
+            return
+        handle = self._handle_at(model, point)
+        if handle is not None and model.allows(CaptureCommand.GRAB_HANDLE):
+            self.controller.handle(CaptureCommand.GRAB_HANDLE, (handle, (point.x(), point.y())))
+            self.grabMouse()
+            return
+        if self.controller.handle(CaptureCommand.BEGIN_DRAG, (point.x(), point.y())):
             self.grabMouse()
 
     def mouseMoveEvent(self, event):
-        c = self.controller
-        if c.state == "selecting":
-            c.cursor_point = event.globalPosition().toPoint()
-            if c.start_point is not None:
-                c.selection = QRect(c.start_point, c.cursor_point).normalized()
-            c.repaint()
+        point = event.globalPosition().toPoint()
+        self.controller.cursor_point = point
+        model = self.model()
+        if model.state == SessionState.ADJUSTING:
+            self.controller.handle(CaptureCommand.DRAG_HANDLE, (point.x(), point.y()))
+        elif model.state == SessionState.SELECTING:
+            self.controller.handle(CaptureCommand.UPDATE_DRAG, (point.x(), point.y()))
+        else:
+            self.controller.repaint()
 
     def mouseReleaseEvent(self, event):
-        if (
-            event.button() == Qt.MouseButton.LeftButton
-            and self.controller.state == "selecting"
-            and self.controller.start_point is not None
-        ):
-            self.releaseMouse()
-            self.controller.selected()
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        point = event.globalPosition().toPoint()
+        model = self.model()
+        self.releaseMouse()
+        if model.state == SessionState.ADJUSTING:
+            self.controller.handle(CaptureCommand.RELEASE_HANDLE)
+        else:
+            self.controller.handle(CaptureCommand.END_DRAG, (point.x(), point.y()))
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.controller.handle(CaptureCommand.CONFIRM)
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_Escape:
-            self.controller.cancel()
+        key = event.key()
+        if key == Qt.Key.Key_Escape:
+            self.controller.handle(CaptureCommand.CANCEL)
+            return
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            model = self.model()
+            command = (
+                CaptureCommand.RETRY
+                if model.state == SessionState.FAILED
+                else CaptureCommand.CONFIRM
+            )
+            self.controller.handle(command)
+            return
+        if key == Qt.Key.Key_R:
+            self.controller.handle(CaptureCommand.RESELECT)
+            return
+        if key in _ARROW_KEYS:
+            step = (
+                NUDGE_STEP_LARGE
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+                else NUDGE_STEP
+            )
+            dx, dy = _ARROW_KEYS[key]
+            handle = (
+                Handle.BOTTOM_RIGHT
+                if event.modifiers() & Qt.KeyboardModifier.ControlModifier
+                else Handle.BODY
+            )
+            self.controller.handle(CaptureCommand.NUDGE, (handle, dx * step, dy * step))
+            return
+        super().keyPressEvent(event)
+
+    def _handle_at(self, model, point):
+        for handle, box in model.handles:
+            if self.local(box).adjusted(-10, -10, 10, 10).contains(
+                point - self.screen.geometry.topLeft()
+            ):
+                return handle
+        return None

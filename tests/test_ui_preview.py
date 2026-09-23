@@ -56,3 +56,27 @@ def test_the_preview_output_is_not_named_after_a_retired_design(tmp_path):
     source = Path(__file__).resolve().parents[1] / "scripts" / "render_ui_preview.py"
 
     assert "settings-ios18.png" not in source.read_text(encoding="utf-8")
+
+
+def test_every_overlay_state_renders():
+    from PySide6.QtCore import QRect
+
+    from screen_translator.graphics import ScreenShot
+    from scripts.render_overlay_preview import (
+        HEIGHT,
+        SCENES,
+        WIDTH,
+        backdrop,
+        render,
+        scene_model,
+    )
+
+    # The overlay only exists between a hotkey press and a result, so this
+    # script is the only way to look at it -- and it would rot just as
+    # quietly as the settings preview did.
+    screen = ScreenShot(QRect(0, 0, WIDTH, HEIGHT), backdrop(), 1)
+    for name, scene in SCENES.items():
+        image = render(scene_model(*scene), screen)
+        assert not image.isNull(), name
+        assert (image.width(), image.height()) == (WIDTH, HEIGHT), name
+

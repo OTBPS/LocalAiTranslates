@@ -121,8 +121,11 @@ def test_a_capture_failure_survives_a_tray_nobody_sees(window):
     controller.session = SimpleNamespace(
         is_current=lambda _generation: True,
         finish_cancel=Mock(),
+        transition=Mock(),
     )
     controller.cancel = Mock()
+    controller.inference = SimpleNamespace(end_capture=Mock())
+    controller.overlays = []
 
     # The window is hidden during a capture, so at this moment the only
     # surface is the tray -- the one Windows can silence.
@@ -146,9 +149,11 @@ def test_a_capture_failure_offers_the_retry_directly(window):
     controller.notices = center
     controller.settings = view
     controller.session = SimpleNamespace(
-        is_current=lambda _generation: True, finish_cancel=Mock()
+        is_current=lambda _generation: True, finish_cancel=Mock(), transition=Mock()
     )
     controller.cancel = Mock()
+    controller.inference = SimpleNamespace(end_capture=Mock())
+    controller.overlays = []
     Controller.failed(controller, 1, "处理失败")
     view.show()
 

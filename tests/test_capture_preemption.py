@@ -8,6 +8,7 @@ import pytest
 from PySide6.QtCore import QRect, QTimer
 from PySide6.QtGui import QImage
 
+from screen_translator.capture import Rect, SelectionModel
 from screen_translator.controller import Controller
 from screen_translator.core import CancellationToken, Cancelled, Config
 from screen_translator.feedback import Occupancy
@@ -96,22 +97,31 @@ def capture_state(pipeline, session=None):
     events = SimpleNamespace(
         progress=Mock(), done=Mock(), failed=Mock(), language_detected=Mock()
     )
-    return SimpleNamespace(
+    selection = SelectionModel()
+    selection.adopt(Rect(0, 0, 40, 40))
+    state = SimpleNamespace(
+        selection_model=selection,
         selection=QRect(0, 0, 40, 40),
         screens=[],
         session=session,
         generation=session.generation,
         token=session.token,
         overlays=[Mock()],
-        capture=None,
+        capture=SimpleNamespace(image=QImage(4, 4, QImage.Format.Format_RGB888)),
+        outcome=None,
+        result=None,
+        started_at=0.0,
         config=Config(source_language="en", target_language="zh-Hans"),
         events=events,
         build_pipeline=lambda _generation: pipeline,
         tasks=SimpleNamespace(start=lambda target, name: target()),
         refresh_language_actions=Mock(),
         notices=Mock(),
+        repaint=Mock(),
         message="",
     )
+    state._start_pipeline = lambda: Controller._start_pipeline(state)
+    return state
 
 
 def test_a_successful_capture_reports_the_rendered_result(monkeypatch):
@@ -129,7 +139,9 @@ def test_a_successful_capture_reports_the_rendered_result(monkeypatch):
     Controller.selected(state)
 
     state.events.done.emit.assert_called_once()
-    assert state.events.done.emit.call_args.args[1] == "image"
+    # The whole outcome is reported, not just the picture: the result layer
+    # needs the translated blocks to offer "copy translation".
+    assert state.events.done.emit.call_args.args[1].rendered == "image"
     state.events.failed.emit.assert_not_called()
 
 

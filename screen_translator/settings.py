@@ -594,6 +594,21 @@ class Settings(QWidget):
         self.status.setText(text)
         self.status.setVisible(bool(text))
 
+    def save_result_image(self, image):
+        """Ask where to put a translated screenshot. Returns the path or ''.
+
+        The flow layer holds the image and never opens a dialog itself; this
+        is the only place that knows a file picker exists.
+        """
+        if image is None:
+            return ""
+        path, _filter = QFileDialog.getSaveFileName(
+            self, "保存译图", "translation.png", "PNG 图片 (*.png)"
+        )
+        if not path:
+            return ""
+        return path if image.save(path) else ""
+
     def browse(self):
         directory = QFileDialog.getExistingDirectory(self, "选择模型目录", self.directory.text())
         if directory:

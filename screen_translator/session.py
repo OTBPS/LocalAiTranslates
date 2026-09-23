@@ -11,16 +11,43 @@ from .core import CancellationToken
 class SessionState(StrEnum):
     IDLE = "idle"
     SELECTING = "selecting"
+    # Releasing the mouse used to commit the selection immediately. ADJUSTING
+    # is the moment in which a selection exists and can still be corrected.
+    ADJUSTING = "adjusting"
     PROCESSING = "working"
     RESULT = "result"
+    # A failure used to tear the overlay down and report through a tray
+    # balloon, losing the selection and often the message with it. FAILED
+    # keeps both on screen so the work can be retried.
+    FAILED = "failed"
     CANCELLING = "cancelling"
 
 
 _ALLOWED_TRANSITIONS = {
     SessionState.IDLE: {SessionState.SELECTING},
-    SessionState.SELECTING: {SessionState.PROCESSING, SessionState.IDLE},
-    SessionState.PROCESSING: {SessionState.RESULT, SessionState.CANCELLING, SessionState.IDLE},
-    SessionState.RESULT: {SessionState.IDLE},
+    SessionState.SELECTING: {
+        SessionState.ADJUSTING,
+        SessionState.PROCESSING,
+        SessionState.IDLE,
+    },
+    SessionState.ADJUSTING: {
+        SessionState.SELECTING,
+        SessionState.PROCESSING,
+        SessionState.IDLE,
+    },
+    SessionState.PROCESSING: {
+        SessionState.RESULT,
+        SessionState.FAILED,
+        SessionState.CANCELLING,
+        SessionState.IDLE,
+    },
+    # RESULT to PROCESSING is retranslation of the capture already in memory.
+    SessionState.RESULT: {SessionState.PROCESSING, SessionState.IDLE},
+    SessionState.FAILED: {
+        SessionState.SELECTING,
+        SessionState.PROCESSING,
+        SessionState.IDLE,
+    },
     SessionState.CANCELLING: {SessionState.IDLE},
 }
 

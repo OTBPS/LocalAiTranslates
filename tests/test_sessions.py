@@ -4,9 +4,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from PySide6.QtCore import QPoint, QRect, Qt
-from PySide6.QtGui import QColor, QFontDatabase, QImage, QPainter
-from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QImage
 
 from screen_translator.controller import Controller
 from screen_translator.feedback import Occupancy
@@ -63,79 +61,8 @@ def test_cancel_closes_all_overlays_and_invalidates_generation():
         overlay.close.assert_called_once()
 
 
-def test_overlay_click_toggle_and_escape():
-    from PySide6.QtTest import QTest
-
-    from screen_translator.graphics import ScreenShot
-    from screen_translator.overlay import Overlay
-
-    _app = QApplication.instance() or QApplication([])
-    QFontDatabase.addApplicationFont("C:/Windows/Fonts/msyh.ttc")
-    image = QImage(300, 200, QImage.Format.Format_RGB888)
-    state = SimpleNamespace(
-        state="result",
-        show_translation=True,
-        repaint=Mock(),
-        cancel=Mock(),
-        show_result_language_menu=Mock(),
-        message="test",
-        capture=SimpleNamespace(logical_rect=QRect(0, 0, 300, 200)),
-        result=image,
-    )
-    overlay = Overlay(state, ScreenShot(QRect(0, 0, 300, 200), image, 1))
-    overlay.show()
-    QTest.mouseClick(overlay, Qt.MouseButton.LeftButton)
-    assert not state.show_translation
-    QTest.mouseClick(overlay, Qt.MouseButton.LeftButton)
-    assert state.show_translation
-    QTest.mouseClick(overlay, Qt.MouseButton.RightButton)
-    state.show_result_language_menu.assert_called_once()
-    QTest.keyClick(overlay, Qt.Key.Key_Escape)
-    state.cancel.assert_called_once()
-    overlay.close()
-
-
-def test_selection_cursor_is_drawn_instead_of_native_cross_cursor():
-    from screen_translator.overlay import draw_selection_cursor
-
-    image = QImage(60, 60, QImage.Format.Format_RGB32)
-    image.fill(QColor("#FFFFFF"))
-    painter = QPainter(image)
-    draw_selection_cursor(painter, QPoint(30, 30))
-    painter.end()
-
-    assert image.pixelColor(30, 30) != QColor("#FFFFFF")
-    assert image.pixelColor(30, 15) != QColor("#FFFFFF")
-
-
-def test_selection_overlay_tracks_cursor_before_drag_starts():
-    from PySide6.QtTest import QTest
-
-    from screen_translator.graphics import ScreenShot
-    from screen_translator.overlay import Overlay
-
-    _app = QApplication.instance() or QApplication([])
-    image = QImage(300, 200, QImage.Format.Format_RGB888)
-    state = SimpleNamespace(
-        state="selecting",
-        selection=None,
-        start_point=None,
-        cursor_point=QPoint(0, 0),
-        repaint=Mock(),
-        message="test",
-    )
-    overlay = Overlay(state, ScreenShot(QRect(0, 0, 300, 200), image, 1))
-    overlay.show()
-
-    assert overlay.cursor().shape() == Qt.CursorShape.BlankCursor
-    QTest.mouseMove(overlay, QPoint(80, 70))
-    assert state.cursor_point != QPoint(0, 0)
-    state.repaint.assert_called()
-    overlay.set_interaction_state("working")
-    assert overlay.cursor().shape() == Qt.CursorShape.WaitCursor
-    overlay.set_interaction_state("result")
-    assert overlay.cursor().shape() == Qt.CursorShape.ArrowCursor
-    overlay.close()
+# Overlay behaviour moved to tests/test_overlay.py, which drives it through
+# the view model rather than a namespace impersonating the controller.
 
 
 def test_language_pair_is_saved_immediately_and_clears_stale_detection():

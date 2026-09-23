@@ -3,14 +3,28 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
+from dataclasses import replace
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, QRect, QTimer, Signal
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
 from .backend import Backend, create_backend
-from .capture import CapturePipeline, CaptureRequest, describe_failure
+from .capture import (
+    CaptureCommand,
+    CapturePipeline,
+    CaptureRequest,
+    OverlayViewModel,
+    Rect,
+    SelectionModel,
+    SelectionPhase,
+    allowed_commands,
+    default_hint,
+    describe_block,
+    describe_failure,
+)
 from .config_store import ConfigStore
 from .contracts import OcrPort, RendererPort, TranslationPort
 from .core import (
@@ -110,6 +124,11 @@ class Controller(QObject):
         self.settings = settings_factory(self)
         self.capture = None
         self.result = None
+        self.outcome = None
+        self.show_translation = True
+        self.selection_model = SelectionModel()
+        self.started_at = time.monotonic()
+        self.message = ""
         self.screens: list[ScreenShot] = []
         self.cursor_point = QCursor.pos()
 
@@ -464,20 +483,78 @@ class Controller(QObject):
             )
         return Occupancy()
 
-    def show_result_language_menu(self, parent, position) -> None:
+    RESULT_MENU_COMMANDS = (
+        CaptureCommand.COPY_TEXT,
+        CaptureCommand.COPY_IMAGE,
+        CaptureCommand.SAVE_IMAGE,
+        CaptureCommand.RETRANSLATE,
+        CaptureCommand.SWAP_LANGUAGES,
+        CaptureCommand.TOGGLE_VIEW,
+    )
+
+    def show_result_menu(self, parent, position) -> None:
+        """Offer what can actually be done with the result in front of you.
+
+        Previously the only entry swapped the language pair *for the next
+        capture*, so the translation on screen could not be copied, saved or
+        redone without starting over.
+        """
+        allowed = allowed_commands(
+            self.session.state, self.selection_model, has_result=self.outcome is not None
+        )
+        if not allowed & set(self.RESULT_MENU_COMMANDS):
+            return
         menu = QMenu(parent)
-        current = menu.addAction(self.language_pair_text())
-        current.setEnabled(False)
-        action = menu.addAction("对调输入/输出语言（用于下次截图）")
+        header = menu.addAction(self.language_pair_text())
+        header.setEnabled(False)
+        menu.addSeparator()
+        for command in self.RESULT_MENU_COMMANDS:
+            action = menu.addAction(command.label)
+            action.setEnabled(command in allowed)
+            if command not in allowed:
+                action.setToolTip(
+                    describe_block(command, self.session.state, self.selection_model)
+                )
+            action.triggered.connect(
+                lambda _checked=False, chosen=command: self.handle(chosen)
+            )
+        menu.popup(position)
+        self.result_menu = menu
+
+    def _on_copy_text(self, _payload) -> None:
+        text = "\n\n".join(item.text for item in self.outcome.translated)
+        self.app.clipboard().setText(text)
+        self.message = "译文已复制"
+
+    def _on_copy_image(self, _payload) -> None:
+        self.app.clipboard().setImage(self.result)
+        self.message = "译图已复制"
+
+    def _on_save_image(self, _payload) -> None:
+        save = getattr(self.settings, "save_result_image", None)
+        if save is None:
+            return
+        path = save(self.result)
+        self.message = f"已保存到 {path}" if path else ""
+
+    def _on_retranslate(self, _payload) -> None:
+        self.session.transition(SessionState.PROCESSING)
+        self.outcome = self.result = None
+        self.started_at = time.monotonic()
+        self.message = ""
+        self._start_pipeline()
+
+    def _on_swap_languages(self, _payload) -> None:
         pair = swap_language_pair(
             self.config.source_language,
             self.config.target_language,
             self.detected_source_language,
         )
-        action.setEnabled(bool(pair) and not self.occupancy().busy)
-        action.triggered.connect(self.swap_languages)
-        menu.popup(position)
-        self.result_language_menu = menu
+        if not pair:
+            self.message = "自动识别需先完成一次识别，且输入输出语言不能相同"
+            return
+        self.set_language_pair(*pair)
+        self._on_retranslate(None)
 
     def set_detected_language(self, generation: int, language: str) -> None:
         if not self.session.is_current(generation) or language not in TARGET_LANGUAGES:
@@ -538,11 +615,14 @@ class Controller(QObject):
             self.screens.append(
                 ScreenShot(screen.geometry(), image, image.width() / screen.geometry().width())
             )
-        self.selection = None
-        self.start_point = None
+        self.selection_model = SelectionModel()
         self.cursor_point = QCursor.pos()
-        self.message = "拖动框选文字 · Esc 取消"
-        self.overlays = [Overlay(self, screen) for screen in self.screens]
+        self.message = ""
+        self.started_at = time.monotonic()
+        self.outcome = None
+        self.overlays = [
+            Overlay(self, screen, index) for index, screen in enumerate(self.screens)
+        ]
         for overlay in self.overlays:
             overlay.show()
             if overlay.geometry().contains(QCursor.pos()):
@@ -569,33 +649,159 @@ class Controller(QObject):
         for overlay in self.overlays:
             overlay.update()
 
+    @property
+    def selection(self):
+        """The selection as a ``QRect``, for the capture geometry helpers."""
+        rect = self.selection_model.rect
+        return None if rect is None else QRect(rect.x, rect.y, rect.width, rect.height)
+
+    def screen_bounds(self) -> Rect:
+        """The union of every captured screen, used to clamp the selection."""
+        if not self.screens:
+            return Rect(0, 0, 0, 0)
+        left = min(item.geometry.left() for item in self.screens)
+        top = min(item.geometry.top() for item in self.screens)
+        right = max(item.geometry.right() for item in self.screens)
+        bottom = max(item.geometry.bottom() for item in self.screens)
+        return Rect(left, top, right - left, bottom - top)
+
+    def overlay_model(self) -> OverlayViewModel:
+        """Everything the overlay needs, decided here rather than read piecemeal."""
+        state = self.session.state
+        commands = allowed_commands(
+            state, self.selection_model, has_result=self.outcome is not None
+        )
+        model = OverlayViewModel(
+            state=state,
+            message=self.message,
+            selection=self.selection_model.rect,
+            handles=self.selection_model.handles()
+            if state in (SessionState.SELECTING, SessionState.ADJUSTING)
+            else (),
+            show_translation=self.show_translation,
+            result=self.result,
+            result_rect=self._result_rect(),
+            commands=commands,
+            language_pair=self.language_pair_text(),
+            elapsed_seconds=int(max(0.0, time.monotonic() - self.started_at)),
+            capsule_screen=self._capsule_screen(),
+            cursor=(self.cursor_point.x(), self.cursor_point.y()),
+        )
+        return replace(model, hint=default_hint(model))
+
+    def _result_rect(self) -> Rect | None:
+        if self.capture is None:
+            return None
+        rect = self.capture.logical_rect
+        return Rect(rect.x(), rect.y(), rect.width(), rect.height())
+
+    def _capsule_screen(self) -> int:
+        """Show the status capsule once, on the screen holding the cursor."""
+        for index, screen in enumerate(self.screens):
+            if screen.geometry.contains(self.cursor_point):
+                return index
+        return 0
+
+    def handle(self, command: CaptureCommand, payload=None) -> bool:
+        """Single entry point for overlay input.
+
+        Returning False rather than doing nothing is what lets the overlay
+        say why, instead of leaving a click indistinguishable from a miss.
+        """
+        if command not in allowed_commands(
+            self.session.state, self.selection_model, has_result=self.outcome is not None
+        ):
+            self.message = describe_block(command, self.session.state, self.selection_model)
+            self.repaint()
+            return False
+        handler = getattr(self, f"_on_{command.name.lower()}", None)
+        if handler is None:
+            return False
+        handler(payload)
+        self.repaint()
+        return True
+
+    def _on_begin_drag(self, point) -> None:
+        self.selection_model.begin_drag(point)
+        if self.session.state == SessionState.ADJUSTING:
+            self.session.transition(SessionState.SELECTING)
+
+    def _on_update_drag(self, point) -> None:
+        self.selection_model.update_drag(point)
+
+    def _on_end_drag(self, point) -> None:
+        phase = self.selection_model.end_drag(point)
+        self.selection_model.clamp(self.screen_bounds())
+        if phase == SelectionPhase.ADJUSTING:
+            self.session.transition(SessionState.ADJUSTING)
+            if self.config.capture_confirm_on_release and self.selection_model.valid:
+                self.handle(CaptureCommand.CONFIRM)
+
+    def _on_grab_handle(self, payload) -> None:
+        handle, point = payload
+        self.selection_model.grab(handle, point)
+
+    def _on_drag_handle(self, point) -> None:
+        self.selection_model.drag_handle(point)
+        self.selection_model.clamp(self.screen_bounds())
+
+    def _on_release_handle(self, _payload) -> None:
+        self.selection_model.release_handle()
+
+    def _on_nudge(self, payload) -> None:
+        handle, dx, dy = payload
+        self.selection_model.nudge(handle, dx, dy)
+        self.selection_model.clamp(self.screen_bounds())
+
+    def _on_reselect(self, _payload) -> None:
+        self.selection_model.reset()
+        self.session.transition(SessionState.SELECTING)
+
+    def _on_cancel(self, _payload) -> None:
+        self.cancel()
+
+    def _on_retry(self, _payload) -> None:
+        self.selected()
+
+    def _on_toggle_view(self, _payload) -> None:
+        self.show_translation = not self.show_translation
+
+    def _on_confirm(self, _payload) -> None:
+        self.selected()
+
     def selected(self) -> None:
-        if not self.selection or self.selection.width() < 12 or self.selection.height() < 12:
-            self.cancel()
-            self.notices.post(
-                Notice(
-                    "selection-too-small",
-                    Severity.WARNING,
-                    "选区太小",
-                    detail="请重新框选文字区域，至少 12 × 12",
-                    context="capture",
-                )
+        if not self.selection_model.valid:
+            self.message = describe_block(
+                CaptureCommand.CONFIRM, self.session.state, self.selection_model
             )
+            self.repaint()
             return
         self.capture = capture_region(self.screens, self.selection)
+        self.outcome = self.result = None
         self.session.transition(SessionState.PROCESSING)
+        self.started_at = time.monotonic()
+        self.message = "准备识别文字…"
+        self._start_pipeline()
+
+    def _start_pipeline(self) -> None:
+        """Run the pipeline over the capture already in memory.
+
+        Retranslating reuses this rather than grabbing the screen again: the
+        screenshot has not changed, and re-grabbing would pick up whatever is
+        now on top of it.
+        """
         for overlay in self.overlays:
             overlay.set_interaction_state("working")
         self.refresh_language_actions()
-        self.message = "准备识别文字…"
         generation = self.generation
         token = self.token
-        capture = self.capture
-        source_language = self.config.source_language
-        target_language = self.config.target_language
 
         pipeline = self.build_pipeline(generation)
-        request = CaptureRequest(capture.image, source_language, target_language)
+        request = CaptureRequest(
+            self.capture.image,
+            self.config.source_language,
+            self.config.target_language,
+        )
 
         def run():
             try:
@@ -604,7 +810,7 @@ class Controller(QObject):
                     token,
                     lambda text: self.events.progress.emit(generation, text),
                 )
-                self.events.done.emit(generation, outcome.rendered)
+                self.events.done.emit(generation, outcome)
             except Cancelled:
                 self.events.done.emit(generation, None)
             except Exception as error:
@@ -638,19 +844,20 @@ class Controller(QObject):
             self.session.finish_cancel()
             self.refresh_language_actions()
 
-    def done(self, generation: int, result) -> None:
+    def done(self, generation: int, outcome) -> None:
         if not self.session.is_current(generation):
             self._finish_stale_cancel(generation)
             return
         self.inference.end_capture()
-        if not self.overlays or result is None:
+        if not self.overlays or outcome is None:
             return
-        self.result = result
+        self.outcome = outcome
+        self.result = outcome.rendered
         self.show_translation = True
         self.session.transition(SessionState.RESULT)
         for overlay in self.overlays:
             overlay.set_interaction_state("result")
-        self.message = "左键切换原图/译文 · 右键切换语言 · Esc 或快捷键退出"
+        self.message = ""
         self.refresh_language_actions()
         self.repaint()
 
@@ -658,9 +865,18 @@ class Controller(QObject):
         if not self.session.is_current(generation):
             self._finish_stale_cancel(generation)
             return
-        self.cancel()
-        # The worker has already finished by the time this signal is handled.
-        self.session.finish_cancel()
+        self.inference.end_capture()
+        if self.overlays:
+            # Keep the overlay and the selection on screen. Tearing them down
+            # discarded the user's framing and left the error with nowhere
+            # reliable to appear.
+            self.session.transition(SessionState.FAILED)
+            self.message = message
+            for overlay in self.overlays:
+                overlay.set_interaction_state("result")
+            self.repaint()
+        else:
+            self.session.transition(SessionState.IDLE)
         self.refresh_language_actions()
         # Sticky, and offering the retry directly. A capture failure used to
         # go out as a tray balloon after the overlay and the selection had
@@ -684,7 +900,7 @@ class Controller(QObject):
             overlay.close()
             overlay.deleteLater()
         self.overlays = []
-        self.capture = self.result = None
+        self.capture = self.result = self.outcome = None
         self.screens = []
         if previous_state != SessionState.PROCESSING:
             self.session.finish_cancel()
