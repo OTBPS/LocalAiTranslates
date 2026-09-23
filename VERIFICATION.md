@@ -61,11 +61,22 @@
   | 客户端版 | `ScreenTranslator-Client-0.8.0-Setup.exe` | 106,960,536 | `202C37AB815C581BBE2DC2E8C5153AAAE43A2621D55CB6DA0D5C0A2A7F1BCAEA` | — |
   | 增量包 | `ScreenTranslator-0.8.0-Update.exe` | 43,431,750 | `FDA83A1044E3877E10876FDD875DC10F153AE8B0A2D5A24B37C53D3B1DC0C054` | 0.7.0 |
 
+  （**每页独立滚动**修复后于 12:17–12:21 重打，取代上一轮：完整版 `5631D673D71664B5D82F35C6194DF322F3DD351A4DF4761B110CB1CB27B2B98D`、客户端版 `878285B3A41B1ABA5BFB794E89FF515021D1F156D371D3154B9208AE539F640A`、增量包 `AA2561348000ABB092B649D1B63853AA261C8AD4A6AA1A176533A80497CC1F0F`。）
+
   三者均未签名（开发产物）。客户端载荷 296.76 MB，仍在 400 MB 上限内。增量包基线取 0.7.0：本分支未改动 `.spec`、`requirements*.txt`、`pyproject.toml` 与 `runtime/`，改的全是 Python 代码与 assets，正落在增量通道适用范围内。
 - 完整版载荷复验：exe 内嵌图标 256 px 取样 `(0, 103, 219)`、包内 ICO 与源文件逐字节一致、`check-dark.svg` 已投递、`screen_translator.widgets.inputs` 在 PYZ 内。
 - **构建前置检查**：`scripts/build.preflight.ps1`，三脚本共用，在任何慢活之前拦截"载荷目录里的应用还在跑"。`--clean` 要整个删掉载荷目录，应用一跑就锁住自己的 `.pyd`，原先的表现是 shutil 深处抛 `PermissionError`，最后一行是本地化的 Windows 报错，完全不指向真实原因。实测三种情形：空闲静默通过、能真的检出、**不会**因仓库内那份已安装的 0.7.0 在托盘而误拦（匹配的是 `dist\<载荷>` 而非项目根）。
 - 写这个前置检查时踩到并修掉一个约定问题：提示最初写成中文，而 **Windows PowerShell 5.1 在无 BOM 时按 ANSI 读 `.ps1`**，结果不是消息乱码而是整份文件解析失败。现有三个构建脚本本来都是纯 ASCII 无 BOM，已改回英文并加 `test_build_scripts_stay_ascii` 盯住。
 - `ISCC.exe` 实编译 `installer.update.iss` 与 `installer.client.iss`（后者 include 完整版脚本）均 exit 0，产出 43,389,774 / 106,775,978 字节的真实安装包。第一次编译**失败**并被抓到：`installer.shell.iss` 的头部注释用了 `;`，那在 `[Code]` 段里不是注释而是空语句。已改为 `//`。
+
+### 真机截图暴露的问题（2026-09-23 中午）
+
+- **文本翻译页的「翻译」按钮在默认窗口尺寸下位于折叠线以下**，截图页则留了一大片空白。根因不是编辑框最小高度（文本页自身 `minimumSizeHint` 只有 509，视口 761），而是 `QTabWidget.minimumSizeHint` 取所有页面的最大值：系统设置页真实需要 819，这个下限泄漏到了每一页，把文本页撑到 808。**量过才发现这不是本次间距改动造成的**——旧的构成主义间距下按钮在 956，改版反而好了 53 px，只是没修好。改为每页各自持有 `QScrollArea` 后，820×840 下截图页与文本页均无需滚动，系统设置页滚 183 px。页头、通知横幅、标签栏留在滚动区之外（横幅报的是三页共用的页脚按钮，让它滚走等于把当初的缺陷换个地方再犯）。
+- **构建前置检查经受了一次真实检验**：重打时已安装的 0.7.0 正在 `Install test\` 下运行，前置检查正确放行——它匹配的是 `dist\<载荷>`，不是项目根目录。
+
+### 已确认但尚未修复的缺陷
+
+- **更新版本的配置会让应用静默死掉，而不是给出提示。** `Config._migrate` 在 `version > CURRENT_CONFIG_VERSION` 时抛裸 `ValueError`，而 `Config.load()` 的 `except` 只捕获 `(JSONDecodeError, UnicodeDecodeError, TypeError)`——`JSONDecodeError` 是 `ValueError` 的子类，反过来不成立。异常穿过 `ConfigStore.__init__` → `Controller.__init__` → `app.main()` 无人接管。后果是双击应用毫无反应：没有弹窗，也没有日志，因为 `configure_logging()` 在读配置之后才执行。对一个存在意义就是"告诉用户去升级"的保护机制而言，这是最差的失败形态。实测复现：写一个 version 6 的配置交给 version 5 读取即抛出。该缺陷在 0.7.0 与 0.8.0 中同样存在，本次未修。
 
 ### 仍待真机目视确认
 
