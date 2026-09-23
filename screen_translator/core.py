@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import os
@@ -81,7 +82,11 @@ LANGUAGE_NAMES = {
 }
 SOURCE_LANGUAGES = tuple(LANGUAGE_NAMES)
 TARGET_LANGUAGES = tuple(code for code in LANGUAGE_NAMES if code != "auto")
-CURRENT_CONFIG_VERSION = 4
+# Version 5 adds every field the interaction refactor needs at once, even the
+# ones nothing reads yet. Bumping once per feature would mean each intermediate
+# release writes a file that an earlier build refuses to load; one bump keeps
+# the on-disk shape stable for the whole refactor.
+CURRENT_CONFIG_VERSION = 5
 
 LOCAL_MODE = "local"
 REMOTE_MODE = "remote"
@@ -90,6 +95,8 @@ DEFAULT_SERVICE_PORT = 8765
 AUTO_SERVICE_ADDRESS = "auto"
 MAX_SECRET_CHARACTERS = 256
 MAX_ALLOWED_PEERS = 32
+MAX_PAIRED_DEVICES = 16
+MAX_DEVICE_LABEL_CHARACTERS = 64
 
 
 def swap_language_pair(source: str, target: str, detected: str | None = None):
@@ -163,6 +170,80 @@ def normalize_service_address(value: object) -> str:
         return AUTO_SERVICE_ADDRESS
 
 
+@dataclass(frozen=True)
+class PairedDevice:
+    """A device that completed pairing and holds its own secret.
+
+    ``device_id`` is a digest of the secret, never the secret itself: it is
+    what logs and the settings list show, so that identifying a device never
+    requires printing credentials.
+    """
+
+    device_id: str
+    label: str
+    address: str
+    secret: str
+    paired_at: float
+    last_seen: float = 0.0
+
+    @staticmethod
+    def identify(secret: str) -> str:
+        return hashlib.sha256(secret.encode("utf-8")).hexdigest()[:16]
+
+
+def normalize_paired_devices(value: object) -> tuple[PairedDevice, ...]:
+    """Rebuild paired devices from JSON, dropping anything malformed.
+
+    ``Config.load`` constructs the dataclass with ``cls(**values)``, which
+    performs no nested conversion; without this the field would hold plain
+    dicts and every reader would have to guess which it got.
+    """
+    if not isinstance(value, (list, tuple)):
+        return ()
+    devices: list[PairedDevice] = []
+    seen: set[str] = set()
+    for item in value:
+        if isinstance(item, PairedDevice):
+            item = asdict(item)
+        if not isinstance(item, dict):
+            continue
+        secret = item.get("secret")
+        if not isinstance(secret, str) or not 1 <= len(secret) <= MAX_SECRET_CHARACTERS:
+            continue
+        label = item.get("label")
+        label = label[:MAX_DEVICE_LABEL_CHARACTERS] if isinstance(label, str) else ""
+        address = item.get("address")
+        address = address.strip() if isinstance(address, str) else ""
+        if address:
+            try:
+                address = str(ipaddress.ip_address(address))
+            except ValueError:
+                address = ""
+        device_id = item.get("device_id")
+        if not isinstance(device_id, str) or not device_id:
+            device_id = PairedDevice.identify(secret)
+        if device_id in seen:
+            continue
+        seen.add(device_id)
+        devices.append(
+            PairedDevice(
+                device_id=device_id,
+                label=label,
+                address=address,
+                secret=secret,
+                paired_at=_timestamp(item.get("paired_at")),
+                last_seen=_timestamp(item.get("last_seen")),
+            )
+        )
+    return tuple(devices[:MAX_PAIRED_DEVICES])
+
+
+def _timestamp(value: object) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) if value >= 0 else 0.0
+    return 0.0
+
+
 def normalize_allowed_peers(value: object) -> tuple[str, ...]:
     if not isinstance(value, (list, tuple)):
         return ()
@@ -200,6 +281,15 @@ class Config:
     service_port: int = DEFAULT_SERVICE_PORT
     service_token: str = ""
     service_allowed_peers: tuple[str, ...] = field(default_factory=tuple)
+    # Fields below are written by version 5 and read as the refactor lands;
+    # see CURRENT_CONFIG_VERSION for why they all arrive together.
+    onboarding_completed: bool = False
+    capture_confirm_on_release: bool = False
+    remote_host_id: str = ""
+    remote_host_label: str = ""
+    remote_protocol: int = 0
+    paired_devices: tuple[PairedDevice, ...] = field(default_factory=tuple)
+    pairing_strict_peers: bool = True
 
     @staticmethod
     def path():
@@ -234,6 +324,36 @@ class Config:
             data.setdefault("service_token", "")
             data.setdefault("service_allowed_peers", [])
             version = 4
+        if version == 4:
+            # True on migration, False for a fresh Config: an installation
+            # that already has a configuration file has already been set up,
+            # and showing it onboarding would be a regression.
+            data.setdefault("onboarding_completed", True)
+            data.setdefault("capture_confirm_on_release", False)
+            data.setdefault("remote_host_id", "")
+            data.setdefault("remote_host_label", "")
+            data.setdefault("remote_protocol", 0)
+            data.setdefault("pairing_strict_peers", True)
+            # An existing host secret becomes the first paired device so the
+            # new multi-secret path has something to work with, while the
+            # original field keeps its value: a downgrade to 0.7.0 must still
+            # find the secret where it expects it.
+            existing = data.get("service_token")
+            if "paired_devices" not in data:
+                data["paired_devices"] = (
+                    [
+                        {
+                            "device_id": PairedDevice.identify(existing),
+                            "label": "已有配对",
+                            "address": "",
+                            "secret": existing,
+                            "paired_at": 0.0,
+                        }
+                    ]
+                    if isinstance(existing, str) and existing
+                    else []
+                )
+            version = 5
         data["version"] = version
         return data
 
@@ -249,7 +369,14 @@ class Config:
 
         if values.get("translation_model") not in TRANSLATION_MODELS:
             values["translation_model"] = defaults.translation_model
-        for name in ("startup", "allow_cpu", "service_enabled"):
+        for name in (
+            "startup",
+            "allow_cpu",
+            "service_enabled",
+            "onboarding_completed",
+            "capture_confirm_on_release",
+            "pairing_strict_peers",
+        ):
             if not isinstance(values.get(name), bool):
                 values[name] = getattr(defaults, name)
         if values.get("mode") not in APPLICATION_MODES:
@@ -269,6 +396,17 @@ class Config:
         values["service_allowed_peers"] = normalize_allowed_peers(
             values.get("service_allowed_peers")
         )
+        values["paired_devices"] = normalize_paired_devices(values.get("paired_devices"))
+        for name in ("remote_host_id", "remote_host_label"):
+            text = values.get(name)
+            values[name] = (
+                text.strip()[:MAX_DEVICE_LABEL_CHARACTERS]
+                if isinstance(text, str)
+                else getattr(defaults, name)
+            )
+        protocol = values.get("remote_protocol")
+        if not isinstance(protocol, int) or isinstance(protocol, bool) or protocol < 0:
+            values["remote_protocol"] = defaults.remote_protocol
         # A remote client with no host to talk to would fail on every capture;
         # fall back to local rather than leaving the app in a dead state.
         if values["mode"] == REMOTE_MODE and not (values["remote_url"] and values["remote_token"]):
@@ -295,6 +433,16 @@ class Config:
             path.replace(backup)
             return cls()
         return cls(**cls._normalize(data))
+
+    def normalized(self):
+        """Return this configuration with every field validated.
+
+        ``dataclasses.replace`` performs no validation, so anything that
+        builds a configuration in memory has to come back through here before
+        it is stored or written; otherwise invalid values are only caught on
+        the next load, after they have already reached disk.
+        """
+        return type(self)(**self._normalize(asdict(self)))
 
     def save(self, path=None):
         path = path or self.path()

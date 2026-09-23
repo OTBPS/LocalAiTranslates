@@ -1,6 +1,5 @@
 """Main application window: capture, text translation, and system settings."""
 
-from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, Signal
@@ -331,6 +330,29 @@ class Settings(QWidget):
         if index >= 0:
             combo.setCurrentIndex(index)
 
+    def show_language_pair(self, source_language, target_language):
+        """Display a stored language pair on every page that shows one.
+
+        The capture page and the text page each have their own pair of combo
+        boxes. They used to be refilled only by a full `load_config()`, so
+        changing the language on one page left the other showing the old
+        value — and saving then read the stale one and wrote it back. Both
+        are updated here from the single stored value.
+        """
+        for page in (self, getattr(self, "text_page", None)):
+            if page is None:
+                continue
+            combos = (page.source_language, page.target_language)
+            for combo in combos:
+                combo.blockSignals(True)
+            try:
+                self.set_combo(combos[0], source_language)
+                self.set_combo(combos[1], target_language)
+            finally:
+                for combo in combos:
+                    combo.blockSignals(False)
+        self.refresh()
+
     def load_config(self):
         self.source_language.blockSignals(True)
         self.target_language.blockSignals(True)
@@ -458,63 +480,61 @@ class Settings(QWidget):
         if self.c.busy or self.c.download_token:
             QMessageBox.information(self, "正在处理", "请先完成或取消当前任务")
             return False
-        # Distinct names on purpose: the except clause below restores the
-        # hotkey, and an earlier version rebound this name to the Config
-        # object further down, so a failure after that point crashed the
-        # error handler itself instead of reporting the error.
-        previous_hotkey = self.c.config.hotkey
+        sequence = self.hotkey.keySequence().toString()
         try:
-            sequence = self.hotkey.keySequence().toString()
-            self.c.hotkey.register(sequence)
-            path = Path(self.directory.text()).expanduser()
-            if not path.is_absolute():
-                raise ValueError("模型目录必须是绝对路径")
-            source_language = self.source_language.currentData()
-            target_language = self.target_language.currentData()
-            translation_model = self.translation_model.currentData()
-            if source_language not in SOURCE_LANGUAGES or target_language not in TARGET_LANGUAGES:
-                raise ValueError("请选择有效的输入和输出语言")
-            if translation_model not in TRANSLATION_MODELS:
-                raise ValueError("请选择有效的翻译模型")
-            remote_values = self.remote_card.values()
-            set_startup(self.startup.isChecked())
-            previous_config = self.c.config
-            config = replace(
-                previous_config,
-                version=CURRENT_CONFIG_VERSION,
-                hotkey=sequence,
-                model_dir=str(path),
-                startup=self.startup.isChecked(),
-                allow_cpu=self.cpu.isChecked(),
-                translation_model=translation_model,
-                source_language=source_language,
-                target_language=target_language,
-                **remote_values,
-            )
-            config.save()
-            runtime_changed = (
-                config.model_dir != previous_config.model_dir
-                or config.allow_cpu != previous_config.allow_cpu
-                or config.translation_model != previous_config.translation_model
-                or runtime_fields_changed(previous_config, config)
-            )
-            source_changed = config.source_language != previous_config.source_language
-            self.c.config = config
-            if source_changed:
-                self.c.detected_source_language = None
-            if runtime_changed:
-                # Rebuilding the backend already reconciles the host listener.
-                self.c.replace_engines()
-            elif service_fields_changed(previous_config, config):
-                self.c.apply_host_service()
-            self.c.refresh_language_actions()
-            self.set_status("已保存")
-            self.refresh()
-            return True
+            # The shortcut is registered for the duration of the save and
+            # rolled back automatically if anything below fails, so the
+            # rollback can no longer be broken by an unrelated edit further
+            # down this method.
+            with self.c.hotkey.pending(sequence):
+                return self._apply_locked(sequence)
         except Exception as error:
-            self.c.hotkey.register(previous_hotkey)
             QMessageBox.warning(self, "设置未保存", str(error))
             return False
+
+    def _apply_locked(self, sequence):
+        """Persist the form. The caller owns shortcut registration and errors."""
+        path = Path(self.directory.text()).expanduser()
+        if not path.is_absolute():
+            raise ValueError("模型目录必须是绝对路径")
+        source_language = self.source_language.currentData()
+        target_language = self.target_language.currentData()
+        translation_model = self.translation_model.currentData()
+        if source_language not in SOURCE_LANGUAGES or target_language not in TARGET_LANGUAGES:
+            raise ValueError("请选择有效的输入和输出语言")
+        if translation_model not in TRANSLATION_MODELS:
+            raise ValueError("请选择有效的翻译模型")
+        remote_values = self.remote_card.values()
+        set_startup(self.startup.isChecked())
+        previous_config = self.c.config
+        config = self.c.configuration.update(
+            version=CURRENT_CONFIG_VERSION,
+            hotkey=sequence,
+            model_dir=str(path),
+            startup=self.startup.isChecked(),
+            allow_cpu=self.cpu.isChecked(),
+            translation_model=translation_model,
+            source_language=source_language,
+            target_language=target_language,
+            **remote_values,
+        )
+        runtime_changed = (
+            config.model_dir != previous_config.model_dir
+            or config.allow_cpu != previous_config.allow_cpu
+            or config.translation_model != previous_config.translation_model
+            or runtime_fields_changed(previous_config, config)
+        )
+        if config.source_language != previous_config.source_language:
+            self.c.detected_source_language = None
+        if runtime_changed:
+            # Rebuilding the backend already reconciles the host listener.
+            self.c.replace_engines()
+        elif service_fields_changed(previous_config, config):
+            self.c.apply_host_service()
+        self.c.refresh_language_actions()
+        self.set_status("已保存")
+        self.refresh()
+        return True
 
     def download_models(self):
         if not self.apply():

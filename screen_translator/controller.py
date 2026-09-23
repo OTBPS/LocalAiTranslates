@@ -5,13 +5,13 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import replace
 
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
 from .backend import Backend, create_backend
+from .config_store import ConfigStore
 from .contracts import OcrPort, RendererPort, TranslationPort
 from .core import (
     LANGUAGE_NAMES,
@@ -23,10 +23,10 @@ from .core import (
     swap_language_pair,
 )
 from .graphics import OverlayRenderer, ScreenShot, capture_region, to_array
+from .hotkeys import HotkeyService
 from .inference import CAPTURE, InferenceCoordinator
 from .logging_setup import configure_logging
 from .manual_translation import ManualTranslationController
-from .native import Hotkey
 from .overlay import Overlay
 from .remote.host import HostService
 from .remote.service import ServiceState
@@ -59,12 +59,18 @@ class Controller(QObject):
         *,
         backend_factory: Callable[[Config], Backend] = create_backend,
         renderer_factory: Callable[[], RendererPort] = OverlayRenderer,
+        # Injected so start-up can be exercised without registering a real
+        # system-wide shortcut, which fails when another copy holds it.
+        hotkey_factory: Callable[..., HotkeyService] = HotkeyService,
         task_runner: TaskRunner | None = None,
         show_settings_when_models_missing: bool = True,
     ):
         super().__init__()
         self.app = app
-        self.config = Config.load()
+        # One owner for configuration. `self.config` stays as a read-only
+        # view so existing call sites keep working; writes go through the
+        # store so nothing has to reload a whole form to stay in sync.
+        self.configuration = ConfigStore(parent=self)
         configure_logging(self.config.log_level)
         self._backend_factory = backend_factory
         self._renderer_factory = renderer_factory
@@ -105,13 +111,13 @@ class Controller(QObject):
         )
         self.tray.show()
 
-        self.hotkey = Hotkey(self.toggle)
-        app.installNativeEventFilter(self.hotkey)
+        self.hotkey = hotkey_factory(app, self.toggle)
         try:
-            self.hotkey.register(self.config.hotkey)
+            self.hotkey.apply(self.config.hotkey)
         except ValueError as error:
             self.tray.showMessage("快捷键不可用", str(error))
 
+        self.configuration.changed.connect(self.on_configuration_changed)
         self.events.progress.connect(self.progress)
         self.events.done.connect(self.done)
         self.events.failed.connect(self.failed)
@@ -131,6 +137,10 @@ class Controller(QObject):
             QTimer.singleShot(0, self.show_settings)
         elif self.backend.ready():
             QTimer.singleShot(1000, self.schedule_ocr_warmup)
+
+    @property
+    def config(self) -> Config:
+        return self.configuration.current
 
     # The engines are reached through the backend so that swapping local for
     # remote is one assignment; everything that used to read ``self.ocr``
@@ -296,8 +306,10 @@ class Controller(QObject):
         if not pair:
             self.tray.showMessage("无法对调语言", "自动识别需先完成一次识别，且输入输出语言不能相同")
             return
+        # No `settings.load_config()` here: reloading the whole form to keep
+        # one pair of combo boxes in sync silently discarded every unsaved
+        # edit in the window. The store announces the change instead.
         self.set_language_pair(*pair)
-        self.settings.load_config()
 
     def set_language_pair(self, source_language: str, target_language: str) -> bool:
         from .core import SOURCE_LANGUAGES
@@ -309,12 +321,10 @@ class Controller(QObject):
         source_changed = source_language != self.config.source_language
         if source_language == self.config.source_language and target_language == self.config.target_language:
             return True
-        self.config = replace(
-            self.config,
+        self.configuration.update(
             source_language=source_language,
             target_language=target_language,
         )
-        self.config.save()
         if source_changed:
             self.detected_source_language = None
             warmup_token = getattr(self, "ocr_warmup_token", None)
@@ -325,6 +335,12 @@ class Controller(QObject):
                 self.schedule_ocr_warmup()
         self.refresh_language_actions()
         return True
+
+    def on_configuration_changed(self, config: Config) -> None:
+        """Push stored values into the views without discarding unsaved edits."""
+        show_languages = getattr(self.settings, "show_language_pair", None)
+        if show_languages is not None:
+            show_languages(config.source_language, config.target_language)
 
     def show_result_language_menu(self, parent, position) -> None:
         menu = QMenu(parent)

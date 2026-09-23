@@ -42,7 +42,7 @@ def test_config_migration(tmp_path):
     path = tmp_path / "config.json"
     path.write_text('{"hotkey":"Ctrl+Shift+T","old":true}')
     config = Config.load(path)
-    assert config.version == 4 and config.hotkey == "Ctrl+Shift+T"
+    assert config.version == 5 and config.hotkey == "Ctrl+Shift+T"
     assert config.source_language == "auto" and config.target_language == "zh-Hans"
     assert config.translation_model == "qwen3-14b-q5-k-m"
     # Cross-device fields are additive: an upgraded single-device install
@@ -65,7 +65,7 @@ def test_version_two_config_adds_translation_model(tmp_path):
     path = tmp_path / "config.json"
     path.write_text('{"version":2,"source_language":"en","target_language":"zh-Hans"}')
     config = Config.load(path)
-    assert config.version == 4
+    assert config.version == 5
     assert config.translation_model == "qwen3-14b-q5-k-m"
 
 

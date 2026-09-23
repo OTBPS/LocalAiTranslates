@@ -1,6 +1,7 @@
 """Saving settings must fail cleanly, and the error path must not fail itself."""
 
 import os
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -10,6 +11,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PySide6.QtWidgets import QApplication
 
+from screen_translator.config_store import ConfigStore
 from screen_translator.core import Config
 from screen_translator.native import hotkey_parts
 from screen_translator.settings import Settings
@@ -20,9 +22,35 @@ def qt_app():
     return QApplication.instance() or QApplication([])
 
 
+class FakeHotkeys:
+    """Stands in for HotkeyService, recording what it was asked to register."""
+
+    def __init__(self, current="Ctrl+Alt+T"):
+        self.current = current
+        self.applied = []
+
+    def apply(self, sequence):
+        if not isinstance(sequence, str):
+            raise ValueError("快捷键格式错误")
+        self.applied.append(sequence)
+        self.current = sequence
+
+    @contextmanager
+    def pending(self, sequence):
+        previous = self.current
+        self.apply(sequence)
+        try:
+            yield
+        except BaseException:
+            self.apply(previous)
+            raise
+
+
 def controller(tmp_path, **overrides):
+    store = ConfigStore(Config(model_dir=str(tmp_path)), writer=lambda _config: None)
     state = SimpleNamespace(
-        config=Config(model_dir=str(tmp_path)),
+        configuration=store,
+        config=store.current,
         busy=False,
         download_token=None,
         detected_source_language=None,
@@ -30,7 +58,7 @@ def controller(tmp_path, **overrides):
         translator=SimpleNamespace(mode="未加载", stop=Mock()),
         backend=SimpleNamespace(kind="local", ready=lambda: True, describe=lambda: "本地模型就绪"),
         host_service=SimpleNamespace(status=SimpleNamespace(describe=lambda: "远程服务未启用")),
-        hotkey=SimpleNamespace(register=Mock()),
+        hotkey=FakeHotkeys(),
         language_pair_text=lambda: "自动识别 → 简体中文",
         set_language_pair=Mock(return_value=True),
         refresh_language_actions=Mock(),
@@ -66,19 +94,19 @@ def test_a_failure_while_saving_restores_the_previous_shortcut(monkeypatch, tmp_
             "screen_translator.settings.QMessageBox.warning",
             lambda *args, **_kwargs: warned.append(args[-1]),
         )
-        # Fail after the point where the config object exists, which is where
-        # the shadowed variable used to take over.
+        # Fail while persisting, i.e. after the point where the old code had
+        # already rebound the variable the rollback depended on.
         monkeypatch.setattr(
-            Config, "save", Mock(side_effect=OSError("disk full"))
+            state.configuration, "update", Mock(side_effect=OSError("disk full"))
         )
+        settings.hotkey.setKeySequence("Ctrl+Alt+J")
 
         assert settings.apply() is False
 
-        # The restore must have been handed the original shortcut string,
-        # not the Config object built moments earlier.
-        restored = state.hotkey.register.call_args.args[0]
-        assert isinstance(restored, str)
-        assert restored == Config().hotkey
+        # The shortcut in force is the one the application actually had, and
+        # the rollback ran without raising anything of its own.
+        assert state.hotkey.current == "Ctrl+Alt+T"
+        assert state.hotkey.applied == ["Ctrl+Alt+J", "Ctrl+Alt+T"]
         assert warned and "disk full" in warned[0]
     finally:
         settings.close()

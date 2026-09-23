@@ -138,21 +138,35 @@ def test_selection_overlay_tracks_cursor_before_drag_starts():
 
 
 def test_language_pair_is_saved_immediately_and_clears_stale_detection():
+    from screen_translator.config_store import ConfigStore
     from screen_translator.core import Config
 
-    config = Config(source_language="auto", target_language="zh-Hans")
-    state = SimpleNamespace(
-        busy=False,
-        download_token=None,
-        config=config,
-        detected_source_language="ja",
-        refresh_language_actions=Mock(),
+    written = []
+    store = ConfigStore(
+        Config(source_language="auto", target_language="zh-Hans"),
+        writer=written.append,
     )
-    with patch.object(Config, "save") as save:
-        assert Controller.set_language_pair(state, "zh-Hans", "en")
-    assert (state.config.source_language, state.config.target_language) == ("zh-Hans", "en")
+
+    class Stand:
+        """`config` reads through the store, exactly as Controller does."""
+
+        busy = False
+        download_token = None
+        configuration = store
+        detected_source_language = "ja"
+        refresh_language_actions = Mock()
+
+        @property
+        def config(self):
+            return self.configuration.current
+
+    state = Stand()
+
+    assert Controller.set_language_pair(state, "zh-Hans", "en")
+
+    assert (store.current.source_language, store.current.target_language) == ("zh-Hans", "en")
     assert state.detected_source_language is None
-    save.assert_called_once()
+    assert len(written) == 1, "the pair must reach disk without a separate save step"
     state.refresh_language_actions.assert_called_once()
 
 
